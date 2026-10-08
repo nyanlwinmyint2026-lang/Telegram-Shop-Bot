@@ -1,4 +1,5 @@
-import sqlite3
+import os
+import psycopg2
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
@@ -6,20 +7,23 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 # --- CONFIGURATIONS ---
 TELEGRAM_BOT_TOKEN = "8969723597:AAFaDiVSxy6TTNipwMWm5hUs2v_YEkrKBmM"
 ADMIN_USER_ID = 6069279282
+DATABASE_URL = "postgresql://neondb_owner:npg_Xv5HWOA4hxPV@ep-long-dew-b4z0dkg4-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
-# --- DATABASE SETUP ---
+def get_db():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, name TEXT, price INTEGER)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS stock (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id TEXT, code TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS stock (id SERIAL PRIMARY KEY, product_id TEXT, code TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT, details TEXT, total_price INTEGER, status TEXT, date TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, user_id BIGINT, username TEXT, details TEXT, total_price INTEGER, status TEXT, date TEXT)''')
     
-    cursor.execute("INSERT OR IGNORE INTO products VALUES ('smile_300', 'Smile One 300 BRL', 30000)")
-    cursor.execute("INSERT OR IGNORE INTO products VALUES ('smile_1k', 'Smile One 1K BRL', 95000)")
-    cursor.execute("INSERT OR IGNORE INTO settings VALUES ('payment_info', 'KBZ Pay: 09XXXXX (Name: U XXX)\\nWave Pay: 09XXXXX')")
+    cursor.execute("INSERT INTO products (id, name, price) VALUES ('smile_300', 'Smile One 300 BRL', 30000) ON CONFLICT (id) DO NOTHING")
+    cursor.execute("INSERT INTO products (id, name, price) VALUES ('smile_1k', 'Smile One 1K BRL', 95000) ON CONFLICT (id) DO NOTHING")
+    cursor.execute("INSERT INTO settings (key, value) VALUES ('payment_info', 'KBZ Pay: 09XXXXX (Name: U XXX)\\nWave Pay: 09XXXXX') ON CONFLICT (key) DO NOTHING")
     conn.commit()
     conn.close()
 
@@ -29,23 +33,20 @@ init_db()
 user_carts = {}
 admin_states = {}
 
-# --- PERSISTENT BOTTOM KEYBOARD ---
 def get_main_keyboard(user_id):
     keyboard = [
-        [KeyboardButton("🛒ဝယ်ယူမည်"), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")]
+        [KeyboardButton("🛒 ဝယ်ယူမည်"), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")]
     ]
     if user_id == ADMIN_USER_ID:
         keyboard.append([KeyboardButton("👑 Admin Panel")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- START COMMAND ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Save user for broadcast feature
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
     conn.commit()
     conn.close()
 
@@ -55,15 +56,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = "🌟 <b>Digital Product Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\nအောက်ပါ Menu ခလုတ်များကို အသုံးပြု၍ အလွယ်တကူ ဝယ်ယူနိုင်ပါသည်။ 👇"
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-# --- HELPER FUNCTIONS ---
 async def show_shop_menu(context, chat_id, message_id=None):
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, price FROM products")
     products = cursor.fetchall()
     keyboard = []
     for p in products:
-        cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=?", (p[0],))
+        cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (p[0],))
         stock_count = cursor.fetchone()[0]
         keyboard.append([InlineKeyboardButton(f"💎 {p[1]} - {p[2]} MMK (Stock: {stock_count})", callback_data=f"buy_{p[0]}")])
     conn.close()
@@ -77,9 +77,9 @@ async def show_shop_menu(context, chat_id, message_id=None):
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def show_orders(context, chat_id, user_id, message_id=None):
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, details, total_price, status, date FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 5", (user_id,))
+    cursor.execute("SELECT id, details, total_price, status, date FROM orders WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
     orders = cursor.fetchall()
     conn.close()
     
@@ -111,21 +111,20 @@ async def show_admin_panel(context, chat_id, message_id=None):
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
 
-# --- TEXT HANDLER ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     chat_id = update.effective_chat.id
 
-    if text == "🛒ဝယ်ယူမည်":
+    if "ဝယ်ယူမည်" in text and "မှတ်တမ်း" not in text:
         if user_id in admin_states: del admin_states[user_id]
         await show_shop_menu(context, chat_id)
         return
-    elif text == "🧾 ဝယ်ယူမှုမှတ်တမ်း":
+    elif "မှတ်တမ်း" in text:
         if user_id in admin_states: del admin_states[user_id]
         await show_orders(context, chat_id, user_id)
         return
-    elif text == "👑 Admin Panel" and user_id == ADMIN_USER_ID:
+    elif "Admin Panel" in text and user_id == ADMIN_USER_ID:
         if user_id in admin_states: del admin_states[user_id]
         await show_admin_panel(context, chat_id)
         return
@@ -134,7 +133,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state = admin_states[user_id]
         action = state["action"]
         
-        conn = sqlite3.connect('shop.db')
+        conn = get_db()
         cursor = conn.cursor()
         
         if action == "add_code":
@@ -143,7 +142,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             added = 0
             for code in codes:
                 if code.strip():
-                    cursor.execute("INSERT INTO stock (product_id, code) VALUES (?, ?)", (prod_id, code.strip()))
+                    cursor.execute("INSERT INTO stock (product_id, code) VALUES (%s, %s)", (prod_id, code.strip()))
                     added += 1
             conn.commit()
             await update.message.reply_text(f"✅ Product <code>{prod_id}</code> အတွက် Code အသစ် {added} ခု အောင်မြင်စွာ သွင်းပြီးပါပြီ。", parse_mode="HTML")
@@ -154,7 +153,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prod_id = state["product_id"]
             try:
                 price = int(text)
-                cursor.execute("UPDATE products SET price=? WHERE id=?", (price, prod_id))
+                cursor.execute("UPDATE products SET price=%s WHERE id=%s", (price, prod_id))
                 conn.commit()
                 await update.message.reply_text(f"✅ Product <code>{prod_id}</code> ၏ ဈေးနှုန်းကို {price} MMK သို့ ပြောင်းလဲလိုက်ပါပြီ。", parse_mode="HTML")
                 del admin_states[user_id]
@@ -164,7 +163,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ ဂဏန်း (Numbers) သာ ရိုက်ထည့်ပါ။", reply_markup=cancel_btn)
                 
         elif action == "set_payment":
-            cursor.execute("UPDATE settings SET value=? WHERE key='payment_info'", (text,))
+            cursor.execute("UPDATE settings SET value=%s WHERE key='payment_info'", (text,))
             conn.commit()
             await update.message.reply_text("✅ Payment Info ကို အောင်မြင်စွာ ပြောင်းလဲလိုက်ပါပြီ။")
             del admin_states[user_id]
@@ -179,7 +178,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=u[0], text=f"📢 <b>ကြေညာချက်:</b>\n\n{text}", parse_mode="HTML")
                     success_count += 1
                 except:
-                    pass # User blocked the bot
+                    pass
             await update.message.reply_text(f"✅ ကြေညာချက်ကို လူ ( {success_count} ) ဦးထံ အောင်မြင်စွာ ပို့ဆောင်ပြီးပါပြီ။")
             del admin_states[user_id]
             await show_admin_panel(context, chat_id)
@@ -189,7 +188,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("ကျေးဇူးပြု၍ အောက်ပါ Menu ခလုတ်များကိုသာ အသုံးပြုပါ။ 👇", reply_markup=get_main_keyboard(user_id))
 
-# --- INLINE BUTTONS HANDLER ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -198,7 +196,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat.id
     msg_id = query.message.message_id
 
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
 
     if data == "cancel_action":
@@ -235,7 +233,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cart_text = "🛒 <b>သင့်ရဲ့ Order စာရင်း:</b>\n\n"
         details = []
         for pid, qty in user_carts[user_id].items():
-            cursor.execute("SELECT name, price FROM products WHERE id=?", (pid,))
+            cursor.execute("SELECT name, price FROM products WHERE id=%s", (pid,))
             prod = cursor.fetchone()
             price = prod[1] * qty
             total_price += price
@@ -251,11 +249,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         details_str = ", ".join(details)
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("INSERT INTO orders (user_id, username, details, total_price, status, date) VALUES (?, ?, ?, ?, ?, ?)", 
+        cursor.execute("INSERT INTO orders (user_id, username, details, total_price, status, date) VALUES (%s, %s, %s, %s, %s, %s)", 
                        (user_id, update.effective_user.username, details_str, total_price, "pending", date_str))
         conn.commit()
         
-        user_carts[user_id] = {} # Clear cart
+        user_carts[user_id] = {} 
         await query.edit_message_text(cart_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ ပယ်ဖျက်မည် (Cancel)", callback_data="shop_menu")]]))
 
     elif data == "manage_stock" and user_id == ADMIN_USER_ID:
@@ -263,7 +261,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         products = cursor.fetchall()
         keyboard = []
         for p in products:
-            cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=?", (p[0],))
+            cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (p[0],))
             count = cursor.fetchone()[0]
             keyboard.append([InlineKeyboardButton(f"➕ Add {p[1]} (ကျန် {count} ခု)", callback_data=f"addcode_{p[0]}")])
         keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel")])
@@ -302,7 +300,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_sales" and user_id == ADMIN_USER_ID:
         today = datetime.now().strftime("%Y-%m-%d")
-        cursor.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE status='accepted' AND date LIKE ?", (f"{today}%",))
+        cursor.execute("SELECT COUNT(*), SUM(total_price) FROM orders WHERE status='accepted' AND date LIKE %s", (f"{today}%",))
         sales = cursor.fetchone()
         count = sales[0] if sales[0] else 0
         total = sales[1] if sales[1] else 0
@@ -311,8 +309,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel")]]))
 
     elif data.startswith("accept_") and user_id == ADMIN_USER_ID:
-        order_id = data.split("_")[1]
-        cursor.execute("SELECT user_id, details, status FROM orders WHERE id=?", (order_id,))
+        order_id = int(data.split("_")[1])
+        cursor.execute("SELECT user_id, details, status FROM orders WHERE id=%s", (order_id,))
         order = cursor.fetchone()
         
         if order and order[2] == "pending":
@@ -324,19 +322,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for item in items:
                 prod_id, qty_str = item.split(":")
                 qty = int(qty_str)
-                cursor.execute("SELECT id, code FROM stock WHERE product_id=? LIMIT ?", (prod_id, qty))
+                cursor.execute("SELECT id, code FROM stock WHERE product_id=%s LIMIT %s", (prod_id, qty))
                 rows = cursor.fetchall()
                 if len(rows) < qty:
                     insufficient = True
                     break
                 for r in rows:
                     codes_to_send.append(f"🔹 {prod_id.upper()} Code: <code>{r[1]}</code>")
-                    cursor.execute("DELETE FROM stock WHERE id=?", (r[0],))
+                    cursor.execute("DELETE FROM stock WHERE id=%s", (r[0],))
                     
             if insufficient:
                 await query.edit_message_caption(caption=f"{query.message.caption}\n\n⚠️ <b>Stock မလောက်ပါ! Admin Panel မှ Code အသစ် အရင်ဖြည့်ပါ။</b>", parse_mode="HTML")
             else:
-                cursor.execute("UPDATE orders SET status='accepted' WHERE id=?", (order_id,))
+                cursor.execute("UPDATE orders SET status='accepted' WHERE id=%s", (order_id,))
                 codes_text = "\n".join(codes_to_send)
                 await context.bot.send_message(chat_id=buyer_id, text=f"✅ <b>သင့်ရဲ့ Order #{order_id} အောင်မြင်ပါတယ်။</b>\n\n🎁 <b>သင်ဝယ်ယူထားသော Codes များ:</b>\n{codes_text}\n\nအားပေးမှုကို ကျေးဇူးတင်ပါတယ်။", parse_mode="HTML")
                 await query.edit_message_caption(caption=f"{query.message.caption}\n\n✅ <b>Order Accepted & Codes Sent!</b>", parse_mode="HTML")
@@ -344,11 +342,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await query.answer("ဤ Order အား ဖြေရှင်းပြီးပါပြီ။", show_alert=True)
 
     elif data.startswith("reject_") and user_id == ADMIN_USER_ID:
-        order_id = data.split("_")[1]
-        cursor.execute("SELECT user_id, status FROM orders WHERE id=?", (order_id,))
+        order_id = int(data.split("_")[1])
+        cursor.execute("SELECT user_id, status FROM orders WHERE id=%s", (order_id,))
         order = cursor.fetchone()
         if order and order[1] == "pending":
-            cursor.execute("UPDATE orders SET status='rejected' WHERE id=?", (order_id,))
+            cursor.execute("UPDATE orders SET status='rejected' WHERE id=%s", (order_id,))
             await context.bot.send_message(chat_id=order[0], text=f"❌ <b>သင့်ရဲ့ Order #{order_id} ကို Admin မှ ငြင်းပယ်လိုက်ပါသည်။</b>\n\n(အကြောင်းရင်း - ငွေလွှဲပြေစာ မမှန်ကန်၍ သို့မဟုတ် လက်ကျန် Stock ကုန်နေ၍ ဖြစ်နိုင်ပါသည်)", parse_mode="HTML")
             await query.edit_message_caption(caption=f"{query.message.caption}\n\n❌ <b>Order Rejected!</b>", parse_mode="HTML")
         else:
@@ -357,13 +355,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- RECEIPT HANDLER (FIXED) ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    conn = sqlite3.connect('shop.db')
+    conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT id, details, total_price FROM orders WHERE user_id=? AND status='pending' ORDER BY id DESC LIMIT 1", (user_id,))
+    cursor.execute("SELECT id, details, total_price FROM orders WHERE user_id=%s AND status='pending' ORDER BY id DESC LIMIT 1", (user_id,))
     order = cursor.fetchone()
     
     if order:
