@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 # --- CONFIGURATIONS ---
-TELEGRAM_BOT_TOKEN = "8969723597":AAH1A0p6LcoLdk71MKSrA3Avz6yAR2vQ_QM
+TELEGRAM_BOT_TOKEN = "8969723597:AAH1A0p6LcoLdk71MKSrA3Avz6yAR2vQ_QM"
 ADMIN_USER_ID = 6069279282
 
 # --- DATABASE SETUP ---
