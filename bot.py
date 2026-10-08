@@ -32,7 +32,7 @@ admin_states = {}
 # --- PERSISTENT BOTTOM KEYBOARD ---
 def get_main_keyboard(user_id):
     keyboard = [
-        [KeyboardButton("🛒 ကတ်ဝယ်ယူမည် (Shop)"), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")]
+        [KeyboardButton("🛒 ဝယ်ယူမည် "), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")]
     ]
     if user_id == ADMIN_USER_ID:
         keyboard.append([KeyboardButton("👑 Admin Panel")])
@@ -117,7 +117,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.effective_chat.id
 
-    if text == "🛒 ကတ်ဝယ်ယူမည် (Shop)":
+    if text == "🛒 ဝယ်ယူမည် ":
         if user_id in admin_states: del admin_states[user_id]
         await show_shop_menu(context, chat_id)
         return
