@@ -65,7 +65,8 @@ async def show_shop_menu(context, chat_id, message_id=None):
     for p in products:
         cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (p[0],))
         stock_count = cursor.fetchone()[0]
-        keyboard.append([InlineKeyboardButton(f"💎 {p[1]} - {p[2]} MMK (Stock: {stock_count})", callback_data=f"buy_{p[0]}")])
+        # Professional UI for product buttons
+        keyboard.append([InlineKeyboardButton(f"🟢 {p[1]} - {p[2]:,} MMK (Stock: {stock_count})", callback_data=f"buy_{p[0]}")])
     conn.close()
     
     text = "🛒 <b>ဝယ်ယူလိုသော Product ကို ရွေးချယ်ပါ။</b>"
@@ -89,7 +90,7 @@ async def show_orders(context, chat_id, user_id, message_id=None):
         text = "🧾 <b>နောက်ဆုံး ဝယ်ယူထားသော ၅ ကြိမ်:</b>\n\n"
         for o in orders:
             status_emoji = "✅" if o[3] == "accepted" else ("❌" if o[3] == "rejected" else "⏳")
-            text += f"🔖 Order #{o[0]} | 💰 {o[2]} MMK\n{status_emoji} Status: {o[3].upper()} | 📅 {o[4]}\n\n"
+            text += f"🔖 Order #{o[0]} | 💰 {o[2]:,} MMK\n{status_emoji} Status: {o[3].upper()} | 📅 {o[4]}\n\n"
             
     if message_id:
         await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML")
@@ -98,10 +99,10 @@ async def show_orders(context, chat_id, user_id, message_id=None):
 
 async def show_admin_panel(context, chat_id, message_id=None):
     keyboard = [
-        [InlineKeyboardButton("📦 Stock ထည့်ရန် (Add Codes)", callback_data="manage_stock")],
-        [InlineKeyboardButton("💵 ဈေးနှုန်း ပြင်ဆင်ရန်", callback_data="manage_price")],
+        [InlineKeyboardButton("➕ Stock ထည့်ရန်", callback_data="manage_stock"), InlineKeyboardButton("💲 ဈေးပြင်ရန်", callback_data="manage_price")],
         [InlineKeyboardButton("🏦 Payment Info ပြင်ရန်", callback_data="manage_payment")],
-        [InlineKeyboardButton("📊 ယနေ့ အရောင်းစာရင်း", callback_data="admin_sales")],
+        [InlineKeyboardButton("📊 ယနေ့ အရောင်း", callback_data="admin_sales"), InlineKeyboardButton("🏆 Top Buyers", callback_data="top_buyers")],
+        [InlineKeyboardButton("👀 Code များကြည့်ရန်", callback_data="view_codes"), InlineKeyboardButton("🗑️ Code ဖျက်ရန်", callback_data="remove_code")],
         [InlineKeyboardButton("📢 ကြေညာချက်ပို့ရန် (Broadcast)", callback_data="admin_broadcast")]
     ]
     text = "👑 <b>Admin Management Panel</b>\n\nလုပ်ဆောင်လိုသော အရာကို အောက်ပါခလုတ်များမှ ရွေးချယ်ပါ:"
@@ -145,7 +146,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cursor.execute("INSERT INTO stock (product_id, code) VALUES (%s, %s)", (prod_id, code.strip()))
                     added += 1
             conn.commit()
-            await update.message.reply_text(f"✅ Product <code>{prod_id}</code> အတွက် Code အသစ် {added} ခု အောင်မြင်စွာ သွင်းပြီးပါပြီ。", parse_mode="HTML")
+            await update.message.reply_text(f"✅ Product <code>{prod_id}</code> အတွက် Code အသစ် {added} ခု အောင်မြင်စွာ သွင်းပြီးပါပြီ။", parse_mode="HTML")
             del admin_states[user_id]
             await show_admin_panel(context, chat_id)
             
@@ -155,11 +156,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 price = int(text)
                 cursor.execute("UPDATE products SET price=%s WHERE id=%s", (price, prod_id))
                 conn.commit()
-                await update.message.reply_text(f"✅ Product <code>{prod_id}</code> ၏ ဈေးနှုန်းကို {price} MMK သို့ ပြောင်းလဲလိုက်ပါပြီ。", parse_mode="HTML")
+                await update.message.reply_text(f"✅ Product <code>{prod_id}</code> ၏ ဈေးနှုန်းကို {price:,} MMK သို့ ပြောင်းလဲလိုက်ပါပြီ။", parse_mode="HTML")
                 del admin_states[user_id]
                 await show_admin_panel(context, chat_id)
             except ValueError:
-                cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel (ဖျက်သိမ်းမည်)", callback_data="cancel_action")]])
+                cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
                 await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ ဂဏန်း (Numbers) သာ ရိုက်ထည့်ပါ။", reply_markup=cancel_btn)
                 
         elif action == "set_payment":
@@ -183,6 +184,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del admin_states[user_id]
             await show_admin_panel(context, chat_id)
             
+        elif action == "remove_code":
+            exact_code = text.strip()
+            cursor.execute("SELECT id, product_id FROM stock WHERE code=%s", (exact_code,))
+            found = cursor.fetchone()
+            
+            if found:
+                cursor.execute("DELETE FROM stock WHERE id=%s", (found[0],))
+                conn.commit()
+                await update.message.reply_text(f"✅ Product <code>{found[1]}</code> ၏ Code <code>{exact_code}</code> ကို အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။", parse_mode="HTML")
+            else:
+                cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
+                await update.message.reply_text("⚠️ အဆိုပါ Code မရှိပါ။ အတိအကျ မှန်ကန်အောင် ပြန်စစ်ပါ။", reply_markup=cancel_btn)
+                return 
+                
+            del admin_states[user_id]
+            await show_admin_panel(context, chat_id)
+            
         conn.close()
         return
 
@@ -202,12 +220,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "cancel_action":
         if user_id in admin_states:
             del admin_states[user_id]
-        await query.edit_message_text("❌ လုပ်ဆောင်ချက်ကို ဖျက်သိမ်းလိုက်ပါပြီ။")
+        await query.edit_message_text("🚫 လုပ်ဆောင်ချက်ကို ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID:
             await show_admin_panel(context, chat_id)
 
     elif data == "shop_menu":
         await show_shop_menu(context, chat_id, msg_id)
+        
     elif data == "admin_panel" and user_id == ADMIN_USER_ID:
         if user_id in admin_states:
             del admin_states[user_id]
@@ -215,18 +234,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("buy_"):
         prod_id = data.replace("buy_", "")
+        
+        # 1. Feature: Check Stock Limit
+        cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (prod_id,))
+        total_stock = cursor.fetchone()[0]
+        
         if user_id not in user_carts:
             user_carts[user_id] = {}
-        if prod_id in user_carts[user_id]:
-            user_carts[user_id][prod_id] += 1
-        else:
-            user_carts[user_id][prod_id] = 1
+            
+        current_qty = user_carts[user_id].get(prod_id, 0)
         
-        keyboard = [
-            [InlineKeyboardButton("🛒 ဆက်ဝယ်မည်", callback_data="shop_menu")],
-            [InlineKeyboardButton("💳 ငွေရှင်းမည် (Checkout)", callback_data="checkout")]
-        ]
-        await query.edit_message_text("✅ ခြင်းတောင်းထဲသို့ ထည့်လိုက်ပါပြီ။ ဆက်လုပ်မည့် အဆင့်ကို ရွေးပါ။", reply_markup=InlineKeyboardMarkup(keyboard))
+        if current_qty >= total_stock:
+            await query.answer(f"⚠️ Stock {total_stock} ခုသာ ကျန်ပါတော့သည်။ ထပ်မံထည့်၍မရပါ။", show_alert=True)
+        else:
+            user_carts[user_id][prod_id] = current_qty + 1
+            keyboard = [
+                [InlineKeyboardButton("🛍️ ဆက်ဝယ်မည်", callback_data="shop_menu")],
+                [InlineKeyboardButton("💳 ငွေရှင်းမည် (Checkout)", callback_data="checkout")]
+            ]
+            await query.edit_message_text("✅ ခြင်းတောင်းထဲသို့ ထည့်လိုက်ပါပြီ။ ဆက်လုပ်မည့် အဆင့်ကို ရွေးပါ။", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "checkout":
         if user_id not in user_carts or not user_carts[user_id]:
@@ -241,10 +267,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prod = cursor.fetchone()
             price = prod[1] * qty
             total_price += price
-            cart_text += f"🔹 {prod[0]} x {qty} ခု = {price} MMK\n"
+            cart_text += f"🔹 {prod[0]} x {qty} ခု = {price:,} MMK\n"
             details.append(f"{pid}:{qty}")
             
-        cart_text += f"\n💰 <b>စုစုပေါင်း ကျသင့်ငွေ - {total_price} MMK</b>\n\n"
+        cart_text += f"\n💰 <b>စုစုပေါင်း ကျသင့်ငွေ - {total_price:,} MMK</b>\n\n"
         
         cursor.execute("SELECT value FROM settings WHERE key='payment_info'")
         payment_info = cursor.fetchone()[0]
@@ -258,7 +284,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         
         user_carts[user_id] = {} 
-        await query.edit_message_text(cart_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ ပယ်ဖျက်မည် (Cancel)", callback_data="shop_menu")]]))
+        await query.edit_message_text(cart_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="shop_menu")]]))
 
     elif data == "manage_stock" and user_id == ADMIN_USER_ID:
         cursor.execute("SELECT id, name FROM products")
@@ -267,8 +293,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for p in products:
             cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (p[0],))
             count = cursor.fetchone()[0]
-            keyboard.append([InlineKeyboardButton(f"➕ Add {p[1]} (ကျန် {count} ခု)", callback_data=f"addcode_{p[0]}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel")])
+            keyboard.append([InlineKeyboardButton(f"➕ Add {p[1]} (ကျန် {count})", callback_data=f"addcode_{p[0]}")])
+        keyboard.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")])
         await query.edit_message_text("📦 ဘယ် Product အတွက် Code အသစ်ထည့်မလဲ ရွေးချယ်ပါ -", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "manage_price" and user_id == ADMIN_USER_ID:
@@ -276,31 +302,74 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         products = cursor.fetchall()
         keyboard = []
         for p in products:
-            keyboard.append([InlineKeyboardButton(f"💵 Edit {p[1]} ({p[2]} MMK)", callback_data=f"editprice_{p[0]}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel")])
-        await query.edit_message_text("💵 ဘယ် Product ရဲ့ ဈေးနှုန်းကို ပြင်ဆင်မလဲ ရွေးချယ်ပါ -", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard.append([InlineKeyboardButton(f"💲 Edit {p[1]} ({p[2]:,} MMK)", callback_data=f"editprice_{p[0]}")])
+        keyboard.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")])
+        await query.edit_message_text("💲 ဘယ် Product ရဲ့ ဈေးနှုန်းကို ပြင်ဆင်မလဲ ရွေးချယ်ပါ -", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "manage_payment" and user_id == ADMIN_USER_ID:
         admin_states[user_id] = {"action": "set_payment"}
-        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel (ဖျက်သိမ်းမည်)", callback_data="cancel_action")]])
+        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
         await query.edit_message_text("🏦 <b>Payment Info အသစ်ကို အောက်တွင် ရိုက်ထည့်ပါ။</b>\n\n(ဥပမာ - KBZ Pay: 09...)", parse_mode="HTML", reply_markup=cancel_btn)
 
     elif data == "admin_broadcast" and user_id == ADMIN_USER_ID:
         admin_states[user_id] = {"action": "broadcast"}
-        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel (ဖျက်သိမ်းမည်)", callback_data="cancel_action")]])
+        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
         await query.edit_message_text("📢 <b>ပို့လိုသော ကြေညာချက် စာသားများကို ရိုက်ထည့်ပါ။</b>\n(ဤစာများကို အသုံးပြုသူ အားလုံးထံသို့ ပေးပို့သွားမည်ဖြစ်ပါသည်)", parse_mode="HTML", reply_markup=cancel_btn)
+
+    elif data == "top_buyers" and user_id == ADMIN_USER_ID:
+        # 2. Feature: Top 5 Buyers based on spent amount
+        current_month = datetime.now().strftime("%Y-%m")
+        cursor.execute("SELECT user_id, username, SUM(total_price) as spent FROM orders WHERE status='accepted' AND date LIKE %s GROUP BY user_id, username ORDER BY spent DESC LIMIT 5", (f"{current_month}%",))
+        top_buyers = cursor.fetchall()
+        
+        text = f"🏆 <b>ဒီလအတွက် Top 5 Buyers ({current_month}):</b>\n\n"
+        if not top_buyers:
+            text += "ဝယ်ယူသူ မရှိသေးပါ။"
+        else:
+            for i, buyer in enumerate(top_buyers):
+                uname = f"@{buyer[1]}" if buyer[1] and buyer[1] != "No_Username" else f"ID: {buyer[0]}"
+                text += f"{i+1}. {uname} - 💰 {buyer[2]:,} MMK\n"
+                
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
+
+    elif data == "view_codes" and user_id == ADMIN_USER_ID:
+        # 3. Feature: View all available codes
+        cursor.execute("SELECT product_id, code FROM stock ORDER BY product_id")
+        stocks = cursor.fetchall()
+        
+        if not stocks:
+            text = "📦 လက်ရှိတွင် Code တစ်ခုမှ မရှိပါ။"
+        else:
+            text = "👀 <b>လက်ရှိ Code များအားလုံး:</b>\n\n"
+            current_prod = ""
+            for s in stocks:
+                if s[0] != current_prod:
+                    text += f"\n💎 <b>{s[0]}</b>:\n"
+                    current_prod = s[0]
+                text += f"<code>{s[1]}</code>\n"
+                
+        if len(text) > 4000:
+            text = text[:4000] + "\n... (စာလုံးရေများနေသဖြင့် အချို့ကိုဖြတ်ထားသည်)"
+            
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
+
+    elif data == "remove_code" and user_id == ADMIN_USER_ID:
+        # 4. Feature: Remove specific code
+        admin_states[user_id] = {"action": "remove_code"}
+        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
+        await query.edit_message_text("🗑️ <b>ဖျက်လိုသော Code စာသားကို အတိအကျ ရိုက်ထည့်ပါ။</b>\n\n(Code များကြည့်ရန် မှ Code ကို Copy ကူးပြီး ဒီမှာ Paste ချပေးပါ)", parse_mode="HTML", reply_markup=cancel_btn)
 
     elif data.startswith("addcode_") and user_id == ADMIN_USER_ID:
         prod_id = data.replace("addcode_", "")
         admin_states[user_id] = {"action": "add_code", "product_id": prod_id}
-        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel (ဖျက်သိမ်းမည်)", callback_data="cancel_action")]])
+        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
         await query.edit_message_text(f"✏️ <code>{prod_id}</code> အတွက် Code အသစ်များကို ရိုက်ထည့်ပါ။\n\n(အများကြီး တစ်ခါတည်း ထည့်လိုပါက တစ်ကြောင်းလျှင် တစ်ခုစီ ခွဲ၍ ရိုက်ပို့ပါ)", parse_mode="HTML", reply_markup=cancel_btn)
 
     elif data.startswith("editprice_") and user_id == ADMIN_USER_ID:
         prod_id = data.replace("editprice_", "")
         admin_states[user_id] = {"action": "set_price", "product_id": prod_id}
-        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel (ဖျက်သိမ်းမည်)", callback_data="cancel_action")]])
-        await query.edit_message_text(f"💵 <code>{prod_id}</code> အတွက် ဈေးနှုန်းအသစ်ကို ဂဏန်းဖြင့် ရိုက်ထည့်ပါ။\n\n(ဥပမာ - 35000)", parse_mode="HTML", reply_markup=cancel_btn)
+        cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_action")]])
+        await query.edit_message_text(f"💲 <code>{prod_id}</code> အတွက် ဈေးနှုန်းအသစ်ကို ဂဏန်းဖြင့် ရိုက်ထည့်ပါ။\n\n(ဥပမာ - 35000)", parse_mode="HTML", reply_markup=cancel_btn)
 
     elif data == "admin_sales" and user_id == ADMIN_USER_ID:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -309,8 +378,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = sales[0] if sales[0] else 0
         total = sales[1] if sales[1] else 0
         
-        text = f"📊 <b>ယနေ့ အရောင်းစာရင်း ({today}):</b>\n\n✅ ရောင်းရသော အရေအတွက်: {count} ကြိမ်\n💰 စုစုပေါင်း ဝင်ငွေ: {total} MMK\n"
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_panel")]]))
+        text = f"📊 <b>ယနေ့ အရောင်းစာရင်း ({today}):</b>\n\n✅ ရောင်းရသော အရေအတွက်: {count} ကြိမ်\n💰 စုစုပေါင်း ဝင်ငွေ: {total:,} MMK\n"
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
 
     elif data.startswith("accept_") and user_id == ADMIN_USER_ID:
         order_id = int(data.split("_")[1])
@@ -332,7 +401,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     insufficient = True
                     break
                 for r in rows:
-                    codes_to_send.append(f"🔹 {prod_id.upper()} Code: <code>{r[1]}</code>")
+                    codes_to_send.append(f"🔸 {prod_id.upper()} : <code>{r[1]}</code>")
                     cursor.execute("DELETE FROM stock WHERE id=%s", (r[0],))
                     
             if insufficient:
@@ -340,8 +409,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 cursor.execute("UPDATE orders SET status='accepted' WHERE id=%s", (order_id,))
                 codes_text = "\n".join(codes_to_send)
+                
+                # Send to Buyer
                 await context.bot.send_message(chat_id=buyer_id, text=f"✅ <b>သင့်ရဲ့ Order #{order_id} အောင်မြင်ပါတယ်။</b>\n\n🎁 <b>သင်ဝယ်ယူထားသော Codes များ:</b>\n{codes_text}\n\nအားပေးမှုကို ကျေးဇူးတင်ပါတယ်။", parse_mode="HTML")
-                await query.edit_message_caption(caption=f"{query.message.caption}\n\n✅ <b>Order Accepted & Codes Sent!</b>", parse_mode="HTML")
+                
+                # 5. Feature: Update Admin Panel Message with sent codes detail
+                admin_caption = f"{query.message.caption}\n\n✅ <b>Order Accepted & Codes Sent!</b>\n\n📦 <b>ပို့လိုက်သော Codes များ:</b>\n{codes_text}"
+                await query.edit_message_caption(caption=admin_caption, parse_mode="HTML")
         else:
              await query.answer("ဤ Order အား ဖြေရှင်းပြီးပါပြီ။", show_alert=True)
 
@@ -372,12 +446,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = update.message.photo[-1].file_id
         
         keyboard = [
-            [InlineKeyboardButton("✅ Accept & Send Codes", callback_data=f"accept_{order_id}")],
-            [InlineKeyboardButton("❌ Reject", callback_data=f"reject_{order_id}")]
+            [InlineKeyboardButton("✅ လက်ခံမည် (Accept)", callback_data=f"accept_{order_id}")],
+            [InlineKeyboardButton("❌ ငြင်းပယ်မည် (Reject)", callback_data=f"reject_{order_id}")]
         ]
         
         username = update.effective_user.username if update.effective_user.username else "No_Username"
-        caption = f"🔔 <b>New Order #{order_id}</b>\n👤 Buyer: @{username} (ID: {user_id})\n📦 Details: {details}\n💰 Total: {total} MMK"
+        caption = f"🔔 <b>New Order #{order_id}</b>\n👤 Buyer: @{username} (ID: {user_id})\n📦 Details: {details}\n💰 Total: {total:,} MMK"
         
         try:
             await context.bot.send_photo(chat_id=ADMIN_USER_ID, photo=photo_file, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -386,7 +460,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ စနစ် ချို့ယွင်းနေပါသည်။", reply_markup=get_main_keyboard(user_id))
             print(f"Error: {e}")
     else:
-        await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ အောက်ပါ '🛒 ကတ်ဝယ်ယူမည်' ကို နှိပ်၍ Product အရင်ရွေးချယ်ပြီးမှ ပြေစာပို့ပေးပါ။", reply_markup=get_main_keyboard(user_id))
+        await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ အောက်ပါ '🛒 ဝယ်ယူမည်' ကို နှိပ်၍ Product အရင်ရွေးချယ်ပြီးမှ ပြေစာပို့ပေးပါ။", reply_markup=get_main_keyboard(user_id))
         
     conn.close()
 
