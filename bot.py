@@ -208,6 +208,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "shop_menu":
         await show_shop_menu(context, chat_id, msg_id)
+    elif data == "admin_panel" and user_id == ADMIN_USER_ID:
+        if user_id in admin_states:
+            del admin_states[user_id]
+        await show_admin_panel(context, chat_id, msg_id)
 
     elif data.startswith("buy_"):
         prod_id = data.replace("buy_", "")
