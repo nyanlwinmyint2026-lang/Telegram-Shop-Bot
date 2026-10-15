@@ -78,6 +78,10 @@ def get_main_keyboard(user_id):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def check_ban_and_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety Check: Return True to stop processing if there's no user
+    if not update.effective_user:
+        return True
+        
     user_id = update.effective_user.id
     if is_user_banned(user_id):
         if update.callback_query: await update.callback_query.answer("🚫 သင့်အကောင့်အား ပိတ်ပင်ထားပါသည်။", show_alert=True)
@@ -226,6 +230,10 @@ async def show_admin_panel(context, chat_id, message_id=None):
     else: await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety Check: Prevent NoneType Error
+    if not update.effective_user or not update.message or not update.message.text:
+        return
+        
     user_id = update.effective_user.id
     text = update.message.text
     chat_id = update.effective_chat.id
@@ -314,6 +322,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    
+    # Safety Check: Prevent NoneType Error
+    if not update.effective_user:
+        await query.answer()
+        return
+        
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
@@ -683,6 +697,10 @@ async def process_photos_group(context, user_id, chat_id, order, photos_list):
         await context.bot.send_message(chat_id=chat_id, text="⚠️ စနစ် ချို့ယွင်းနေပါသည်။", reply_markup=get_main_keyboard(user_id))
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Safety Check: Prevent NoneType Error
+    if not update.effective_user or not update.message or not update.message.photo:
+        return
+        
     if await check_ban_and_shop(update, context): return
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
