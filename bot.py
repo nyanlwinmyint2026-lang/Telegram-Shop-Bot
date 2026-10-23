@@ -360,11 +360,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             headers = {"X-API-Key": G2BULK_API_KEY}
             
-            # v1/products သို့ ပြန်ပြောင်းထားပါသည် (Error 404 မတက်စေရန်)
             url = "https://api.g2bulk.com/v1/products"
             response = requests.get(url, headers=headers)
             
-            # အကယ်၍ v1/products လည်းမရှိပါက v1/games ဖြင့် ထပ်မံစမ်းသပ်ပါမည်
             if response.status_code == 404:
                 url = "https://api.g2bulk.com/v1/games"
                 response = requests.get(url, headers=headers)
@@ -388,9 +386,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 added_count = 0
                 for p in api_products:
+                    # ID ယူရန်
                     raw_id = p.get('id') or p.get('code') or p.get('service') or None
-                    p_name = p.get('name') or p.get('catalogue_name') or p.get('title') or "Unknown"
-                    raw_price = p.get('price') or p.get('rate') or 0
+                    
+                    # ဓာတ်ပုံထဲက JSON အရ 'title' ဖြစ်ကြောင်းတွေ့ရပါသည်
+                    p_name = p.get('title') or p.get('name') or p.get('catalogue_name') or "Unknown"
+                    
+                    # ဓာတ်ပုံထဲက JSON အရ 'unit_price' ဖြစ်ကြောင်းတွေ့ရပါသည်
+                    raw_price = p.get('unit_price') or p.get('price') or p.get('rate') or 0
                     
                     if raw_id and float(raw_price) > 0:
                         p_usd = float(raw_price)
@@ -406,7 +409,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         added_count += 1
                 conn.commit()
 
-                # အကယ်၍ Product တစ်ခုမှ မဝင်ပါက Admin ထံသို့ API Response အစစ်အမှန်ကို ပို့ပြမည်
                 if added_count == 0:
                     debug_txt = str(json_data)[:800]
                     err_msg = f"⚠️ <b>API ချိတ်ဆက်မှု အောင်မြင်သော်လည်း Product မတွေ့ပါ။</b>\n\n<b>URL:</b> {url}\n<b>Data:</b>\n<code>{debug_txt}</code>"
