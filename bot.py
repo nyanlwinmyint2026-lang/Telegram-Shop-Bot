@@ -359,29 +359,53 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             profit_pct = float(cursor.fetchone()[0])
 
             headers = {"X-API-Key": G2BULK_API_KEY}
-            response = requests.get("https://api.g2bulk.com/v1/products", headers=headers)
+            # G2Bulk ၏ ပုံမှန် Product Endpoint ကို 'catalogue' အဖြစ် ပြောင်းလဲအသုံးပြုထားပါသည်
+            response = requests.get("https://api.g2bulk.com/v1/catalogue", headers=headers)
             
             if response.status_code == 200:
-                api_products = response.json().get('data', [])
+                json_data = response.json()
+                api_products = []
+                
+                # JSON Format ပုံစံအမျိုးမျိုးကို အလိုအလျောက် သိရှိစေရန်
+                if isinstance(json_data, list):
+                    api_products = json_data
+                elif isinstance(json_data, dict):
+                    api_products = json_data.get('data') or json_data.get('catalogue') or json_data.get('products') or []
+                    if not api_products:
+                        for v in json_data.values():
+                            if isinstance(v, list):
+                                api_products = v
+                                break
+
                 added_count = 0
                 for p in api_products:
-                    p_id = f"g2_{p['id']}" 
-                    p_name = p['name']
-                    p_usd = float(p['price'])
+                    raw_id = p.get('id') or p.get('code') or p.get('service') or None
+                    p_name = p.get('name') or p.get('catalogue_name') or p.get('title') or "Unknown Product"
+                    raw_price = p.get('price') or p.get('rate') or 0
                     
-                    base_mmk = p_usd * rate
-                    final_mmk = int(base_mmk + (base_mmk * (profit_pct / 100)))
-                    
-                    cursor.execute("""
-                        INSERT INTO products (id, name, price) 
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (id) DO UPDATE SET price = EXCLUDED.price, name = EXCLUDED.name
-                    """, (p_id, p_name, final_mmk))
-                    added_count += 1
+                    if raw_id and float(raw_price) > 0:
+                        p_usd = float(raw_price)
+                        base_mmk = p_usd * rate
+                        final_mmk = int(base_mmk + (base_mmk * (profit_pct / 100)))
+                        p_id = f"g2_{raw_id}"
+                        
+                        cursor.execute("""
+                            INSERT INTO products (id, name, price) 
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (id) DO UPDATE SET price = EXCLUDED.price, name = EXCLUDED.name
+                        """, (p_id, str(p_name), final_mmk))
+                        added_count += 1
                 conn.commit()
-                await query.edit_message_text(f"✅ G2Bulk မှ Product ( {added_count} ) ခုကို ဆွဲယူပြီး ဈေးနှုန်း(MMK) တွက်ချက်ထည့်သွင်းပြီးပါပြီ။\n\n📌 အသုံးပြုခဲ့သော ပုံသေနည်း:\n1$ = {rate} Ks | Profit = {profit_pct}%", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
+
+                # အကယ်၍ Product တစ်ခုမှ မဝင်ပါက Admin ထံသို့ API Response အစစ်အမှန်ကို ပို့ပြမည်
+                if added_count == 0:
+                    debug_txt = str(json_data)[:800]
+                    err_msg = f"⚠️ <b>API ချိတ်ဆက်မှု အောင်မြင်သော်လည်း Product မတွေ့ပါ။</b>\n\n<b>G2Bulk မှ ပြန်ပို့သောစာ:</b>\n<code>{debug_txt}</code>"
+                    await query.edit_message_text(err_msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
+                else:
+                    await query.edit_message_text(f"✅ G2Bulk မှ Product ( {added_count} ) ခုကို ဆွဲယူပြီး ဈေးနှုန်း(MMK) တွက်ချက်ထည့်သွင်းပြီးပါပြီ။\n\n📌 1$ = {rate} Ks | Profit = {profit_pct}%", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
             else:
-                await query.edit_message_text(f"⚠️ API ချိတ်ဆက်မှု Error ဖြစ်နေပါသည်။: {response.status_code}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
+                await query.edit_message_text(f"⚠️ API ချိတ်ဆက်မှု Error ဖြစ်နေပါသည်။: {response.status_code}\n{response.text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
         except Exception as e:
             await query.edit_message_text(f"⚠️ ချို့ယွင်းချက်ဖြစ်ပေါ်နေပါသည်။ Error: {str(e)}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin သို့ ပြန်သွားရန်", callback_data="admin_panel")]]))
 
