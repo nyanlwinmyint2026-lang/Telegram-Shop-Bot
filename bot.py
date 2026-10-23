@@ -55,7 +55,7 @@ init_db()
 user_carts = {}
 admin_states = {}
 user_states = {}
-user_last_search = {} # User ရှာဖွေထားသော စာသားကို မှတ်သားရန်
+user_last_search = {}
 media_groups = defaultdict(list)
 
 def is_user_banned(user_id):
@@ -116,7 +116,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-# --- Updated Smart Cart & Search System ---
 async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1, is_search=False):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
@@ -128,11 +127,11 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     if not is_search:
         cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE 'g2_%'")
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'g2_%' ORDER BY price ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'g2_%%' ORDER BY price ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
     else:
         search_term = user_last_search.get(user_id, "")
         db_search = f"%{search_term}%"
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'g2_%' AND name ILIKE %s", (db_search,))
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s", (db_search,))
         total_products = cursor.fetchone()[0]
         
         if total_products == 0:
@@ -145,7 +144,7 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
             conn.close()
             return
             
-        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'g2_%' AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", (db_search, ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", (db_search, ITEMS_PER_PAGE, offset))
 
     total_pages = (total_products + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     if total_pages == 0: total_pages = 1
@@ -165,7 +164,7 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     keyboard = []
     
     if not is_search:
-        text = f"🛒 <b>ဝယ်ယူလိုသော ကိုယ်ပိုင် Product ကို ရွေးချယ်ပါ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n💡 <i>အခြား Game Top-up များ ဝယ်ယူလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, Mobile Legends) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>\n\n"
+        text = f"🛒 <b>ဝယ်ယူလိုသော Product ကို ရွေးချယ်ပါ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n💡 <i>အခြား Game Top-up များ ဝယ်ယူလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, Mobile Legends) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>\n\n"
     else:
         search_term = user_last_search.get(user_id, "")
         text = f"🔍 <b>'{search_term}' အတွက် ရှာဖွေတွေ့ရှိမှုများ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n"
@@ -336,7 +335,7 @@ async def process_checkout(context, chat_id, user_id, msg_id=None, player_id_inp
     conn.commit()
     conn.close()
     
-    user_carts[user_id] = {} # Checkout သွားလျှင် Cart အလွတ်လုပ်မည်
+    user_carts[user_id] = {} 
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_cart")]])
     
     if msg_id:
@@ -361,11 +360,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_user_dashboard(update, context)
         return
 
-    elif text == "🛍️ ဝယ်ယူမည် (Products)":
+    elif "ဝယ်ယူမည်" in text and "မှတ်တမ်း" not in text:
         if await check_ban_and_shop(update, context): return
         if user_id in admin_states: del admin_states[user_id]
         if user_id in user_states: del user_states[user_id]
-        # ဒီနေရာမှာ Cart ကိုဖျက်မည်မဟုတ်ပါ (အခြားရှာထားသည်များနှင့် တွဲဝယ်နိုင်ရန်)
         await show_cart_selector(context, chat_id, user_id, page=1, is_search=False)
         return
 
@@ -493,7 +491,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 လုပ်ဆောင်ချက် ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID: await show_admin_panel(context, chat_id)
 
-    # --- Updated Pagination & Modifier Callbacks ---
     elif data.startswith("page|"):
         parts = data.split("|")
         target_page = int(parts[1])
