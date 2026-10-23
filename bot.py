@@ -81,8 +81,7 @@ def get_main_keyboard(user_id):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def check_ban_and_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user:
-        return True
+    if not update.effective_user: return True
     user_id = update.effective_user.id
     if is_user_banned(user_id):
         if update.callback_query: await update.callback_query.answer("🚫 သင့်အကောင့်အား ပိတ်ပင်ထားပါသည်။", show_alert=True)
@@ -108,26 +107,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = "🌟 <b>Digital Product Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\n💳 သင့်အတွက် အကောင်းဆုံး ဝန်ဆောင်မှုပေးရန် အဆင်သင့်ရှိနေပါသည်။\n👇 အောက်ပါ Menu ခလုတ်များကို အသုံးပြု၍ အလွယ်တကူ ဝယ်ယူနိုင်ပါသည်။"
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-async def show_cart_selector(context, chat_id, user_id, message_id=None):
+# --- Updated Pagination Cart System (Manual Products First) ---
+async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price FROM products ORDER BY price ASC")
+    
+    ITEMS_PER_PAGE = 10
+    offset = (page - 1) * ITEMS_PER_PAGE
+    
+    cursor.execute("SELECT COUNT(*) FROM products")
+    total_products = cursor.fetchone()[0]
+    total_pages = (total_products + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    if total_pages == 0: total_pages = 1
+
+    # Database query တွင် ကိုယ်ပိုင် Product (g2_ ဖြင့် မစသောအရာများ) ကို အပေါ်ဆုံး (Page 1) တွင် အမြဲရှိနေစေရန် စီစဉ်ထားပါသည်
+    cursor.execute("""
+        SELECT id, name, price 
+        FROM products 
+        ORDER BY CASE WHEN id LIKE 'g2_%%' THEN 1 ELSE 0 END ASC, price ASC 
+        LIMIT %s OFFSET %s
+    """, (ITEMS_PER_PAGE, offset))
     products = cursor.fetchall()
 
+    total_amount = 0
+    total_items = 0
+    
+    # Calculate overall cart total from previous selections
+    for cart_pid, qty in user_carts[user_id].items():
+        if qty > 0:
+            cursor.execute("SELECT price FROM products WHERE id=%s", (cart_pid,))
+            res = cursor.fetchone()
+            if res:
+                total_amount += res[0] * qty
+                total_items += qty
+
     keyboard = []
-    text = "🛒 <b>ဝယ်ယူလိုသော Product အရေအတွက်များကို ရွေးချယ်ပါ:</b>\n\n"
-    total_amount = total_items = 0
+    text = f"🛒 <b>ဝယ်ယူလိုသော Product ကို ရွေးချယ်ပါ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n"
 
     for p in products:
         p_id, p_name, p_price = p
         
         is_g2bulk = str(p_id).startswith("g2_")
-        
         if is_g2bulk:
             stock_count = 99999
             stock_badge = "(✅ In Stock)"
         else:
+            # သင့်ကိုယ်ပိုင် Product များအတွက်သာ Stock စစ်ဆေးမည်ဖြစ်ပါသည်
             cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (p_id,))
             stock_count = cursor.fetchone()[0]
             stock_badge = f"(✅ Stock: {stock_count})" if stock_count > 0 else "(❌ Out of Stock)"
@@ -137,19 +163,25 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None):
         user_carts[user_id][p_id] = current_qty
 
         item_total = current_qty * p_price
-        total_amount += item_total
-        total_items += current_qty
 
         text += f"🔹 <b>{p_name}</b> {stock_badge}\n   💵 စျေးနှုန်း: <b>{p_price:,}</b> MMK\n   📦 ရွေးထားသည်: <b>{current_qty}</b> ခု = <b>{item_total:,}</b> MMK\n\n"
-        keyboard.append([InlineKeyboardButton(f"🟦 {p_name} ({p_price:,} MMK)", callback_data="noop")])
+        keyboard.append([InlineKeyboardButton(f"🟦 {p_name[:30]} ({p_price:,} MMK)", callback_data="noop")])
         keyboard.append([
-            InlineKeyboardButton("➖ 1", callback_data=f"mod_{p_id}_-1"),
+            InlineKeyboardButton("➖ 1", callback_data=f"mod|{p_id}|-1|{page}"),
             InlineKeyboardButton(f"🔢 {current_qty} ခု", callback_data="noop"),
-            InlineKeyboardButton("➕ 1", callback_data=f"mod_{p_id}_1")
+            InlineKeyboardButton("➕ 1", callback_data=f"mod|{p_id}|1|{page}")
         ])
+
     conn.close()
 
     text += f"━━━━━━━━━━━━━━━━━━\n💰 <b>စုစုပေါင်း ကျသင့်ငွေ: {total_amount:,} MMK</b> ({total_items} ခု)"
+    
+    # Pagination Navigation Buttons
+    nav_row = []
+    if page > 1: nav_row.append(InlineKeyboardButton("⬅️ ယခင်စာမျက်နှာ", callback_data=f"page_{page-1}"))
+    if page < total_pages: nav_row.append(InlineKeyboardButton("နောက်စာမျက်နှာ ➡️", callback_data=f"page_{page+1}"))
+    if nav_row: keyboard.append(nav_row)
+
     action_row = []
     if total_amount > 0: action_row.append(InlineKeyboardButton(f"🟩 ငွေရှင်းမည် ({total_amount:,} MMK)", callback_data="checkout_cart"))
     action_row.append(InlineKeyboardButton("🟥 မဝယ်တော့ပါ (Cancel)", callback_data="cancel_cart"))
@@ -232,7 +264,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await check_ban_and_shop(update, context): return
         if user_id in admin_states: del admin_states[user_id]
         if user_id in user_carts: del user_carts[user_id]
-        await show_cart_selector(context, chat_id, user_id)
+        await show_cart_selector(context, chat_id, user_id, page=1)
         return
     elif "မှတ်တမ်း" in text:
         if user_id in admin_states: del admin_states[user_id]
@@ -350,6 +382,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 လုပ်ဆောင်ချက် ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID: await show_admin_panel(context, chat_id)
 
+    elif data.startswith("page_"):
+        target_page = int(data.split("_")[1])
+        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=target_page)
+
+    elif data.startswith("mod|"):
+        parts = data.split("|")
+        prod_id = parts[1]
+        delta = int(parts[2])
+        page = int(parts[3])
+         
+        is_g2bulk = str(prod_id).startswith("g2_")
+        if is_g2bulk: stock_count = 99999
+        else:
+            cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (prod_id,))
+            stock_count = cursor.fetchone()[0]
+
+        if user_id not in user_carts: user_carts[user_id] = {}
+        new_qty = user_carts[user_id].get(prod_id, 0) + delta
+        if new_qty < 0: new_qty = 0
+        elif new_qty > stock_count:
+            await query.answer(f"⚠️ Stock မလောက်တော့ပါ။", show_alert=True)
+            new_qty = stock_count
+        user_carts[user_id][prod_id] = new_qty
+        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=page)
+
     elif data == "sync_g2bulk" and user_id == ADMIN_USER_ID:
         await query.edit_message_text("🔄 G2Bulk API မှ Product များကို ဆွဲယူနေပါသည်... ခေတ္တစောင့်ပါ။")
         try:
@@ -386,13 +443,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 added_count = 0
                 for p in api_products:
-                    # ID ယူရန်
                     raw_id = p.get('id') or p.get('code') or p.get('service') or None
-                    
-                    # ဓာတ်ပုံထဲက JSON အရ 'title' ဖြစ်ကြောင်းတွေ့ရပါသည်
                     p_name = p.get('title') or p.get('name') or p.get('catalogue_name') or "Unknown"
-                    
-                    # ဓာတ်ပုံထဲက JSON အရ 'unit_price' ဖြစ်ကြောင်းတွေ့ရပါသည်
                     raw_price = p.get('unit_price') or p.get('price') or p.get('rate') or 0
                     
                     if raw_id and float(raw_price) > 0:
@@ -427,30 +479,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "set_profit" and user_id == ADMIN_USER_ID:
         admin_states[user_id] = {"action": "set_profit"}
         await query.edit_message_text("📈 <b>Product တစ်ခုအတွက် ယူမည့် အမြတ်ရာခိုင်နှုန်း (%) ကို ရိုက်ထည့်ပါ။</b>\nဥပမာ - 5", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည်", callback_data="cancel_action")]]))
-
-    elif data.startswith("mod_"):
-        parts = data.split("_")
-        if len(parts) == 4:
-            prod_id = f"{parts[1]}_{parts[2]}"
-            delta = int(parts[3])
-        else:
-            prod_id = f"{parts[1]}_{parts[2]}" if len(parts) > 3 else parts[1]
-            delta = int(parts[-1])
-             
-        is_g2bulk = str(prod_id).startswith("g2_")
-        if is_g2bulk: stock_count = 99999
-        else:
-            cursor.execute("SELECT COUNT(*) FROM stock WHERE product_id=%s", (prod_id,))
-            stock_count = cursor.fetchone()[0]
-
-        if user_id not in user_carts: user_carts[user_id] = {}
-        new_qty = user_carts[user_id].get(prod_id, 0) + delta
-        if new_qty < 0: new_qty = 0
-        elif new_qty > stock_count:
-            await query.answer(f"⚠️ Stock မလောက်တော့ပါ။", show_alert=True)
-            new_qty = stock_count
-        user_carts[user_id][prod_id] = new_qty
-        await show_cart_selector(context, chat_id, user_id, message_id=msg_id)
 
     elif data == "checkout_cart":
         if user_id not in user_carts or not any(user_carts[user_id].values()):
@@ -700,6 +728,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     is_g2bulk = str(pid).startswith("g2_")
                     if is_g2bulk:
+                        # G2Bulk အတွက် ကိုယ်တိုင် Order တင်ရမည်ဖြစ်၍ Admin ၏ ဖြေရှင်းချက်သာ ပေးပို့ပါမည်
                         codes_to_send.append(f"🔸 {pid} : G2Bulk မှ ပို့ပေးပါမည်။")
                     else:
                         cursor.execute("SELECT id, code FROM stock WHERE product_id=%s LIMIT %s", (pid, qty))
