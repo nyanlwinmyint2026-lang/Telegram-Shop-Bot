@@ -82,7 +82,9 @@ user_carts = {}
 admin_states = {}
 user_states = {}
 user_last_search = {}
-processed_media_groups = {}
+# Album Photos Buffer Tracking
+media_groups = defaultdict(list)
+media_group_tasks = {}
 
 def is_user_banned(user_id):
     conn = get_db()
@@ -1060,39 +1062,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- Media Group Safe Photo Handler ---
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user or not update.message or not update.message.photo: return
-    if await check_ban_and_shop(update, context): return
-    
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    context.user_data["username"] = update.effective_user.username
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, details, total_price, monthly_id FROM orders WHERE user_id=%s AND status='pending' ORDER BY id DESC LIMIT 1", (user_id,))
-    order = cursor.fetchone()
-    conn.close()
-    
-    if not order:
-        await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ '🛍️ ဝယ်ယူမည်' ကို နှိပ်၍ အရင်ရွေးချယ်ပြီးမှ ပြေစာပို့ပေးပါ။", reply_markup=get_main_keyboard(user_id))
-        return
-
-    photo_obj = update.message.photo[-1]
-    media_group_id = update.message.media_group_id
-    
-    # ဓာတ်ပုံများစွာတွဲပို့ပါက ပထမဆုံးပုံတစ်ပုံကိုသာ အသုံးပြုပြီး ကျန်ပုံများကို ကျော်သွားမည်
-    if media_group_id:
-        if media_group_id in processed_media_groups:
-            return
-        processed_media_groups[media_group_id] = True
-        if len(processed_media_groups) > 500:
-            processed_media_groups.clear()
-
+# --- Async Buffer Processor for Multiple Photos (Album/Single) ---
+async def process_photos_group(context, user_id, chat_id, order, photos_list):
     order_id, details, total, monthly_id = order
     display_order_id = monthly_id if monthly_id else order_id
-    
     conn = get_db()
     cursor = conn.cursor()
 
@@ -1102,15 +1075,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for f in all_f_ids_raw:
         if f[0]: existing_f_ids.extend(f[0].split(","))
 
-    current_unique_id = photo_obj.file_unique_id
-    if current_unique_id in existing_f_ids:
-        cursor.execute("UPDATE orders SET status='rejected' WHERE id=%s", (order_id,))
-        conn.commit()
-        conn.close()
-        await context.bot.send_message(chat_id=chat_id, text="🚫 <b>ဤပြေစာအား အသုံးပြုပြီးဖြစ်ပါသည်။</b> ငွေရှင်းခြင်းကို ပယ်ချလိုက်ပါသည်။", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
-        return
+    current_unique_ids = [p["unique_id"] for p in photos_list]
+    for c_id in current_unique_ids:
+        if c_id in existing_f_ids:
+            cursor.execute("UPDATE orders SET status='rejected' WHERE id=%s", (order_id,))
+            conn.commit()
+            conn.close()
+            await context.bot.send_message(chat_id=chat_id, text="🚫 <b>ဤပြေစာအား အသုံးပြုပြီးဖြစ်ပါသည်။</b> ငွေရှင်းခြင်းကို ပယ်ချလိုက်ပါသည်။", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
+            return
             
-    cursor.execute("UPDATE orders SET file_unique_ids=%s WHERE id=%s", (current_unique_id, order_id))
+    u_ids_str = ",".join(current_unique_ids)
+    cursor.execute("UPDATE orders SET file_unique_ids=%s WHERE id=%s", (u_ids_str, order_id))
     conn.commit()
     conn.close()
 
@@ -1141,10 +1116,57 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = f"🔔 <b>New Order #{display_order_id}</b>\n👤 Buyer: {display_uname} (ID: <code>{user_id}</code>)\n📦 Details:\n{chr(10).join(display_details)}{uid_info}\n💰 Total: {total:,} MMK"
     
     try:
-        await context.bot.send_photo(chat_id=ADMIN_USER_ID, photo=photo_obj.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        if len(photos_list) > 1:
+            # ဓာတ်ပုံအားလုံးကို Album ပြုလုပ်၍ Admin ထံ ပေးပို့မည်
+            media = [InputMediaPhoto(photos_list[0]["id"], caption=caption, parse_mode="HTML")] + [InputMediaPhoto(p["id"]) for p in photos_list[1:]]
+            await context.bot.send_media_group(chat_id=ADMIN_USER_ID, media=media)
+            await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"👆 အထက်ပါ Order #{display_order_id} အတွက် ဆုံးဖြတ်ချက်ချပါ:", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await context.bot.send_photo(chat_id=ADMIN_USER_ID, photo=photos_list[0]["id"], caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            
         await context.bot.send_message(chat_id=chat_id, text="✅ <b>ငွေလွှဲပြေစာ လက်ခံရရှိပါပြီ။</b> Admin မှ စစ်ဆေးပြီးပါက Code များကို ဤနေရာသို့ ချက်ချင်း ပို့ပေးပါမည်။", parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
     except Exception as e:
         await context.bot.send_message(chat_id=chat_id, text="⚠️ စနစ် ချို့ယွင်းနေပါသည်။", reply_markup=get_main_keyboard(user_id))
+
+# Delayed worker for media group debouncing
+async def delayed_media_group_worker(context, user_id, chat_id, order, media_group_id):
+    await asyncio.sleep(2.0) # ဓာတ်ပုံများ အကုန်ရောက်သည်အထိ ၂ စက္ကန့် စောင့်ဆိုင်းမည်
+    photos = media_groups.pop(media_group_id, [])
+    media_group_tasks.pop(media_group_id, None)
+    if photos:
+        await process_photos_group(context, user_id, chat_id, order, photos)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.message or not update.message.photo: return
+    if await check_ban_and_shop(update, context): return
+    
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    context.user_data["username"] = update.effective_user.username
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, details, total_price, monthly_id FROM orders WHERE user_id=%s AND status='pending' ORDER BY id DESC LIMIT 1", (user_id,))
+    order = cursor.fetchone()
+    conn.close()
+    
+    if not order:
+        await update.message.reply_text("⚠️ ကျေးဇူးပြု၍ '🛍️ ဝယ်ယူမည်' ကို နှိပ်၍ အရင်ရွေးချယ်ပြီးမှ ပြေစာပို့ပေးပါ။", reply_markup=get_main_keyboard(user_id))
+        return
+
+    photo_obj = update.message.photo[-1]
+    photo_data = {"id": photo_obj.file_id, "unique_id": photo_obj.file_unique_id}
+    media_group_id = update.message.media_group_id
+    
+    if media_group_id:
+        media_groups[media_group_id].append(photo_data)
+        if media_group_id not in media_group_tasks:
+            # Task အသစ်ဖွင့်၍ အုပ်စုဖွဲ့ ပို့ဆောင်စေမည်
+            media_group_tasks[media_group_id] = asyncio.create_task(
+                delayed_media_group_worker(context, user_id, chat_id, order, media_group_id)
+            )
+    else:
+        await process_photos_group(context, user_id, chat_id, order, [photo_data])
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
