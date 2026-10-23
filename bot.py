@@ -17,6 +17,32 @@ BOT_LINK = "https://t.me/MSTCODESHOPBOT"
 # G2Bulk API Key
 G2BULK_API_KEY = "g2b_2de2af3455055d7a975ffd6fceadce2b42b0c4458a369ff7e69fb02bee134fa3"
 
+# Smile One Coin Data from User Reference
+SMILE_RATES = {
+    "passes": [
+        ("Weekly Pass", 76),
+        ("Twilight Pass", 402.5),
+        ("Weekly Elite Package", 39),
+        ("Monthly Epic", 196.5)
+    ],
+    "bonus_dia": [
+        ("50+50 Dia", 39),
+        ("150+150 Dia", 116.9),
+        ("250+250 Dia", 187.5),
+        ("500+500 Dia", 385)
+    ],
+    "normal_dia": [
+        ("78+8 Dia", 61.5),
+        ("156+16 Dia", 122),
+        ("234+23 Dia", 177.5),
+        ("625+81 Dia", 480),
+        ("1860+335 Dia", 1453),
+        ("3099+589 Dia", 2424),
+        ("4649+883 Dia", 3660),
+        ("7740+1548 Dia", 6079)
+    ]
+}
+
 def get_db():
     return psycopg2.connect(DATABASE_URL)
 
@@ -56,7 +82,6 @@ user_carts = {}
 admin_states = {}
 user_states = {}
 user_last_search = {}
-# Photo Bug ကို ရှင်းလင်းရန် Dictionary သစ်
 processed_media_groups = {}
 
 def is_user_banned(user_id):
@@ -78,7 +103,7 @@ def is_shop_open():
 def get_main_keyboard(user_id):
     keyboard = [
         [KeyboardButton("🛍️ ဝယ်ယူမည် (Products)"), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")],
-        [KeyboardButton("👤 ကျွန်ုပ်၏ အကောင့်")]
+        [KeyboardButton("🧮 Smile Coin ဈေးတွက်မယ်"), KeyboardButton("👤 ကျွန်ုပ်၏ အကောင့်")]
     ]
     if user_id == ADMIN_USER_ID:
         keyboard.append([KeyboardButton("👑 Admin Panel")])
@@ -117,7 +142,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-# --- NEW: Categories Menu ---
+# --- Categories Menu ---
 async def show_categories_menu(context, chat_id, message_id=None):
     text = "🎮 <b>ဝယ်ယူလိုသော Game အမျိုးအစားကို ရွေးချယ်ပါ:</b>"
     keyboard = [
@@ -128,14 +153,13 @@ async def show_categories_menu(context, chat_id, message_id=None):
         [InlineKeyboardButton("🔍 အခြား Game ရှာရန် (Search)", callback_data="cat|Search")],
         [InlineKeyboardButton("🔙 ကိုယ်ပိုင် Products သို့ ပြန်သွားရန်", callback_data="cat|Manual")]
     ]
-    
     if message_id:
         try: await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         except: pass
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# --- UPDATED: Cart Selector with Category Filters ---
+# --- Cart Selector with Category Filters ---
 async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1, cat_type="Manual"):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
@@ -145,18 +169,17 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     offset = (page - 1) * ITEMS_PER_PAGE
     
     if cat_type == "Manual":
-        # ကိုယ်ပိုင် Product များကိုသာ ပြမည်
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE 'g2_%'")
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE %s", ('g2_%',))
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'g2_%%' ORDER BY price ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE %s ORDER BY price ASC LIMIT %s OFFSET %s", ('g2_%', ITEMS_PER_PAGE, offset))
         header_text = f"🛒 <b>ကိုယ်ပိုင် Products (စာမျက်နှာ {page}):</b>\n\n"
         
     elif cat_type == "Search":
         search_term = user_last_search.get(user_id, "")
         db_search = f"%{search_term}%"
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s", (db_search,))
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE %s AND name ILIKE %s", ('g2_%', db_search))
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", (db_search, ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE %s AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", ('g2_%', db_search, ITEMS_PER_PAGE, offset))
         header_text = f"🔍 <b>'{search_term}' အတွက် ရှာဖွေတွေ့ရှိမှုများ (စာမျက်နှာ {page}):</b>\n\n"
         
         if total_products == 0:
@@ -169,11 +192,10 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
             return
             
     else:
-        # Category အလိုက် ပြမည် (PUBG, Mobile Legends, etc)
         db_search = f"%{cat_type}%"
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s", (db_search,))
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE %s AND name ILIKE %s", ('g2_%', db_search))
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'g2_%%' AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", (db_search, ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE %s AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", ('g2_%', db_search, ITEMS_PER_PAGE, offset))
         header_text = f"🎮 <b>{cat_type} Packages (စာမျက်နှာ {page}):</b>\n\n"
 
     total_pages = (total_products + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
@@ -183,7 +205,6 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     total_amount = 0
     total_items = 0
     
-    # ခြင်းတောင်းထဲမှ စုစုပေါင်း တွက်ချက်ခြင်း
     for cart_pid, qty in user_carts[user_id].items():
         if qty > 0:
             cursor.execute("SELECT price FROM products WHERE id=%s", (cart_pid,))
@@ -215,7 +236,6 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
         text += f"🔹 <b>{p_name}</b> {stock_badge}\n   💵 စျေးနှုန်း: <b>{p_price:,}</b> MMK\n   📦 ရွေးထားသည်: <b>{current_qty}</b> ခု = <b>{item_total:,}</b> MMK\n\n"
         keyboard.append([InlineKeyboardButton(f"🟦 {p_name[:30]} ({p_price:,} MMK)", callback_data="noop")])
         
-        # Safe URL encoding for callback
         safe_cat = cat_type.replace(" ", "_")
         keyboard.append([
             InlineKeyboardButton("➖ 1", callback_data=f"m|{p_id}|-1|{page}|{safe_cat}"),
@@ -227,14 +247,12 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
 
     text += f"━━━━━━━━━━━━━━━━━━\n💰 <b>စုစုပေါင်း ကျသင့်ငွေ: {total_amount:,} MMK</b> ({total_items} ခု)"
     
-    # Pagination Navigation
     nav_row = []
     safe_cat = cat_type.replace(" ", "_")
     if page > 1: nav_row.append(InlineKeyboardButton("⬅️ ယခင်", callback_data=f"page|{page-1}|{safe_cat}"))
     if page < total_pages: nav_row.append(InlineKeyboardButton("နောက်သို့ ➡️", callback_data=f"page|{page+1}|{safe_cat}"))
     if nav_row: keyboard.append(nav_row)
 
-    # Main Category / Checkout Buttons
     if cat_type == "Manual":
         keyboard.append([InlineKeyboardButton("🎮 အခြား Game များ ရွေးရန်", callback_data="open_categories")])
     else:
@@ -251,6 +269,19 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
+# --- Reseller Calculator Features ---
+async def start_calculator_flow(context, chat_id, message_id=None):
+    text = "🧮 <b>Smile Coin Reseller ဈေးနှုန်းတွက်ရန်</b>\n\nသင်ဝယ်ယူထားသော Code အမျိုးအစားကို ရွေးချယ်ပါ:"
+    keyboard = [
+        [InlineKeyboardButton("🎟️ 300 Code (300 Coins)", callback_data="calc_code_300")],
+        [InlineKeyboardButton("🎟️ 1k Code (1000 Coins)", callback_data="calc_code_1000")],
+        [InlineKeyboardButton("🟥 မတွက်တော့ပါ (Cancel)", callback_data="cancel_calc")]
+    ]
+    if message_id:
+        try: await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        except: pass
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def show_orders(context, chat_id, user_id, message_id=None):
     conn = get_db()
@@ -385,10 +416,39 @@ async def process_checkout(context, chat_id, user_id, msg_id=None, player_id_inp
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.message or not update.message.text: return
     user_id = update.effective_user.id
-    text = update.message.text
+    text = update.message.text.strip()
     chat_id = update.effective_chat.id
     context.user_data["username"] = update.effective_user.username
 
+    # Handle Calculator Price Input
+    if user_id in user_states and user_states[user_id].get("action") == "waiting_calc_price":
+        try:
+            cost = float(text.replace(",", ""))
+            if cost <= 0: raise ValueError
+            user_states[user_id]["cost"] = cost
+            coins = user_states[user_id]["coins"]
+            
+            prompt = (
+                f"📈 <b>အမြတ်တင်လိုသော ရာခိုင်နှုန်း (%) ကို ရွေးချယ်ပါ:</b>\n\n"
+                f"🎟️ Code: <b>{coins} Coins</b>\n"
+                f"💵 ဝယ်ရင်းဈေး: <b>{int(cost):,} MMK</b>\n"
+                f"🪙 1 Coin တန်ဖိုး: <b>{(cost/coins):.2f} MMK</b>"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton("5% အမြတ်", callback_data="calc_pct_5"),
+                    InlineKeyboardButton("6% အမြတ်", callback_data="calc_pct_6"),
+                    InlineKeyboardButton("7% အမြတ်", callback_data="calc_pct_7")
+                ],
+                [InlineKeyboardButton("🟥 ပယ်ဖျက်မည်", callback_data="cancel_calc")]
+            ]
+            await update.message.reply_text(prompt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        except:
+            await update.message.reply_text("⚠️ ဈေးနှုန်းကို ဂဏန်းသီးသန့်ဖြင့် မှန်ကန်စွာ ရိုက်ထည့်ပေးပါ။ (ဥပမာ - <code>27400</code>)", parse_mode="HTML")
+            return
+
+    # Handle Player ID input during checkout
     if user_id in user_states and user_states[user_id] == "waiting_player_id":
         player_id_input = text
         del user_states[user_id]
@@ -399,7 +459,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_user_dashboard(update, context)
         return
 
-    elif text == "🛍️ ဝယ်ယူမည် (Products)":
+    elif text == "🧮 Smile Coin ဈေးတွက်မယ်":
+        if await check_ban_and_shop(update, context): return
+        if user_id in user_states: del user_states[user_id]
+        await start_calculator_flow(context, chat_id)
+        return
+
+    elif "ဝယ်ယူမည်" in text and "မှတ်တမ်း" not in text:
         if await check_ban_and_shop(update, context): return
         if user_id in admin_states: del admin_states[user_id]
         if user_id in user_states: del user_states[user_id]
@@ -530,6 +596,68 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 လုပ်ဆောင်ချက် ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID: await show_admin_panel(context, chat_id)
 
+    # --- Calculator Callbacks ---
+    elif data == "cancel_calc":
+        if user_id in user_states: del user_states[user_id]
+        await query.edit_message_text("🚫 ဈေးနှုန်းတွက်ချက်မှုကို ပယ်ဖျက်လိုက်ပါပြီ။")
+
+    elif data == "start_calc":
+        await start_calculator_flow(context, chat_id, message_id=msg_id)
+
+    elif data in ("calc_code_300", "calc_code_1000"):
+        coins = 300 if data == "calc_code_300" else 1000
+        user_states[user_id] = {"action": "waiting_calc_price", "coins": coins}
+        await query.edit_message_text(
+            f"💵 <b>{coins} Code ဝယ်ယူခဲ့သော ဈေးနှုန်း (MMK) ကို အောက်တွင် ရိုက်ထည့်ပေးပါ:</b>\n\n(ဥပမာ - <code>27400</code>)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည်", callback_data="cancel_calc")]])
+        )
+
+    elif data.startswith("calc_pct_"):
+        pct = int(data.split("_")[2])
+        state = user_states.get(user_id, {})
+        coins = state.get("coins", 300)
+        cost = state.get("cost", 0)
+
+        if cost <= 0:
+            await query.edit_message_text("⚠️ အချိန်လွန်သွားပါသဖြင့် ပြန်လည်စတင်ပေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]))
+            return
+
+        coin_cost = cost / coins
+        profit_multiplier = 1 + (pct / 100)
+
+        def fmt_row(name, item_coins):
+            item_cost = round(item_coins * coin_cost)
+            item_sell = round(item_cost * profit_multiplier)
+            return f"• <b>{name}</b> ({item_coins} Coins)\n  အရင်း: {item_cost:,} Ks | ရောင်း: <b>{item_sell:,} Ks</b>\n"
+
+        calc_text = (
+            f"🧮 <b>Smile Coin Reseller ဈေးနှုန်းတွက်ချက်မှု</b>\n\n"
+            f"🎟️ Code: <b>{coins} Coins</b>\n"
+            f"💵 ဝယ်ရင်းဈေး: <b>{int(cost):,} MMK</b>\n"
+            f"🪙 1 Coin တန်ဖိုး: <b>{coin_cost:.2f} MMK</b>\n"
+            f"📈 အမြတ်တင်နှုန်း: <b>{pct}%</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎟️ <b>Passes & Packages</b>\n"
+        )
+        for name, c in SMILE_RATES["passes"]:
+            calc_text += fmt_row(name, c)
+
+        calc_text += f"\n💎 <b>Double Diamonds (1+1)</b>\n"
+        for name, c in SMILE_RATES["bonus_dia"]:
+            calc_text += fmt_row(name, c)
+
+        calc_text += f"\n💎 <b>Normal Diamonds</b>\n"
+        for name, c in SMILE_RATES["normal_dia"]:
+            calc_text += fmt_row(name, c)
+
+        calc_text += "━━━━━━━━━━━━━━━━━━"
+
+        keyboard = [[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]
+        await query.edit_message_text(calc_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        if user_id in user_states: del user_states[user_id]
+
+    # --- Category & Cart Navigation ---
     elif data == "open_categories":
         await show_categories_menu(context, chat_id, message_id=msg_id)
 
@@ -543,7 +671,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("page|"):
         parts = data.split("|")
         target_page = int(parts[1])
-        cat_type = parts[2].replace("_", " ") # Decode safe string
+        cat_type = parts[2].replace("_", " ")
         await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=target_page, cat_type=cat_type)
 
     elif data.startswith("m|"):
@@ -670,7 +798,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin_panel(context, chat_id, msg_id)
 
     elif data == "manage_stock_menu" and user_id == ADMIN_USER_ID:
-        cursor.execute("SELECT id, name FROM products WHERE id NOT LIKE 'g2_%'")
+        cursor.execute("SELECT id, name FROM products WHERE id NOT LIKE %s", ('g2_%',))
         products = cursor.fetchall()
         text = "📦 <b>Stock စာရင်းနှင့် Code စီမံရန် (Manual Products)</b>\n\n"
         keyboard = []
@@ -770,7 +898,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
 
     elif data == "manage_price" and user_id == ADMIN_USER_ID:
-        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'g2_%'")
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE %s", ('g2_%',))
         products = cursor.fetchall()
         keyboard = []
         for p in products: keyboard.append([InlineKeyboardButton(f"🟨 Edit {p[1]} ({p[2]:,} MMK)", callback_data=f"editprice_{p[0]}")])
@@ -932,7 +1060,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- REWRITTEN: Fix for Media Group (Multiple Photos) Bug ---
+# --- Media Group Safe Photo Handler ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not update.message or not update.message.photo: return
     if await check_ban_and_shop(update, context): return
@@ -954,20 +1082,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo_obj = update.message.photo[-1]
     media_group_id = update.message.media_group_id
     
-    # ဓာတ်ပုံအများကြီးတွဲပို့ပါက ပထမဆုံးပုံတစ်ပုံတည်းကိုသာ ဖမ်းယူမည်
+    # ဓာတ်ပုံများစွာတွဲပို့ပါက ပထမဆုံးပုံတစ်ပုံကိုသာ အသုံးပြုပြီး ကျန်ပုံများကို ကျော်သွားမည်
     if media_group_id:
         if media_group_id in processed_media_groups:
-            return # ဒုတိယပုံ၊ တတိယပုံများကို ကျော်သွားမည်
+            return
         processed_media_groups[media_group_id] = True
+        if len(processed_media_groups) > 500:
+            processed_media_groups.clear()
 
-    # Process receipt immediately
     order_id, details, total, monthly_id = order
     display_order_id = monthly_id if monthly_id else order_id
     
     conn = get_db()
     cursor = conn.cursor()
 
-    # Fake Slip Method: Check File Unique IDs
     cursor.execute("SELECT file_unique_ids FROM orders WHERE status IN ('pending', 'accepted')")
     all_f_ids_raw = cursor.fetchall()
     existing_f_ids = []
