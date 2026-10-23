@@ -55,6 +55,7 @@ init_db()
 user_carts = {}
 admin_states = {}
 user_states = {}
+user_last_search = {} # User ရှာဖွေထားသော စာသားကို မှတ်သားရန်
 media_groups = defaultdict(list)
 
 def is_user_banned(user_id):
@@ -107,28 +108,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     
-    welcome_text = "🌟 <b>Digital Product Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\n💳 သင့်အတွက် အကောင်းဆုံး ဝန်ဆောင်မှုပေးရန် အဆင်သင့်ရှိနေပါသည်။\n👇 အောက်ပါ Menu ခလုတ်များကို အသုံးပြု၍ အလွယ်တကူ ဝယ်ယူနိုင်ပါသည်။"
+    welcome_text = (
+        "🌟 <b>Digital Product Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\n"
+        "💳 သင့်အတွက် အကောင်းဆုံး ဝန်ဆောင်မှုပေးရန် အဆင်သင့်ရှိနေပါသည်။\n"
+        "👇 အောက်ပါ Menu ခလုတ်များကို အသုံးပြု၍ အလွယ်တကူ ဝယ်ယူနိုင်ပါသည်။\n\n"
+        "💡 <i>အခြား Game Top-up များ ဝယ်ယူလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, Mobile Legends) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>"
+    )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1):
+# --- Updated Smart Cart & Search System ---
+async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1, is_search=False):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
     cursor = conn.cursor()
     
-    ITEMS_PER_PAGE = 10
+    ITEMS_PER_PAGE = 8
     offset = (page - 1) * ITEMS_PER_PAGE
     
-    cursor.execute("SELECT COUNT(*) FROM products")
-    total_products = cursor.fetchone()[0]
+    if not is_search:
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE 'g2_%'")
+        total_products = cursor.fetchone()[0]
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'g2_%' ORDER BY price ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
+    else:
+        search_term = user_last_search.get(user_id, "")
+        db_search = f"%{search_term}%"
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'g2_%' AND name ILIKE %s", (db_search,))
+        total_products = cursor.fetchone()[0]
+        
+        if total_products == 0:
+            msg = f"⚠️ <b>'{search_term}'</b> အတွက် ရှာဖွေမှု မတွေ့ရှိပါ။ စာလုံးပေါင်း အမှန်ရိုက်ထည့်ကြည့်ပါခင်ဗျာ။ (ဥပမာ - PUBG, MLBB, Free Fire)"
+            if message_id:
+                try: await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=msg, parse_mode="HTML")
+                except: pass
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+            conn.close()
+            return
+            
+        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'g2_%' AND name ILIKE %s ORDER BY name ASC LIMIT %s OFFSET %s", (db_search, ITEMS_PER_PAGE, offset))
+
     total_pages = (total_products + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     if total_pages == 0: total_pages = 1
-
-    cursor.execute("""
-        SELECT id, name, price 
-        FROM products 
-        ORDER BY CASE WHEN id LIKE 'g2_%%' THEN 1 ELSE 0 END ASC, price ASC 
-        LIMIT %s OFFSET %s
-    """, (ITEMS_PER_PAGE, offset))
     products = cursor.fetchall()
 
     total_amount = 0
@@ -143,7 +163,12 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1)
                 total_items += qty
 
     keyboard = []
-    text = f"🛒 <b>ဝယ်ယူလိုသော Product ကို ရွေးချယ်ပါ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n"
+    
+    if not is_search:
+        text = f"🛒 <b>ဝယ်ယူလိုသော ကိုယ်ပိုင် Product ကို ရွေးချယ်ပါ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n💡 <i>အခြား Game Top-up များ ဝယ်ယူလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, Mobile Legends) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>\n\n"
+    else:
+        search_term = user_last_search.get(user_id, "")
+        text = f"🔍 <b>'{search_term}' အတွက် ရှာဖွေတွေ့ရှိမှုများ (စာမျက်နှာ {page}/{total_pages}):</b>\n\n"
 
     for p in products:
         p_id, p_name, p_price = p
@@ -160,15 +185,16 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1)
         current_qty = user_carts[user_id].get(p_id, 0)
         if current_qty > stock_count: current_qty = stock_count
         user_carts[user_id][p_id] = current_qty
-
         item_total = current_qty * p_price
 
         text += f"🔹 <b>{p_name}</b> {stock_badge}\n   💵 စျေးနှုန်း: <b>{p_price:,}</b> MMK\n   📦 ရွေးထားသည်: <b>{current_qty}</b> ခု = <b>{item_total:,}</b> MMK\n\n"
         keyboard.append([InlineKeyboardButton(f"🟦 {p_name[:30]} ({p_price:,} MMK)", callback_data="noop")])
+        
+        is_search_flag = 1 if is_search else 0
         keyboard.append([
-            InlineKeyboardButton("➖ 1", callback_data=f"mod|{p_id}|-1|{page}"),
+            InlineKeyboardButton("➖ 1", callback_data=f"m|{p_id}|-1|{page}|{is_search_flag}"),
             InlineKeyboardButton(f"🔢 {current_qty} ခု", callback_data="noop"),
-            InlineKeyboardButton("➕ 1", callback_data=f"mod|{p_id}|1|{page}")
+            InlineKeyboardButton("➕ 1", callback_data=f"m|{p_id}|1|{page}|{is_search_flag}")
         ])
 
     conn.close()
@@ -176,8 +202,9 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1)
     text += f"━━━━━━━━━━━━━━━━━━\n💰 <b>စုစုပေါင်း ကျသင့်ငွေ: {total_amount:,} MMK</b> ({total_items} ခု)"
     
     nav_row = []
-    if page > 1: nav_row.append(InlineKeyboardButton("⬅️ ယခင်စာမျက်နှာ", callback_data=f"page_{page-1}"))
-    if page < total_pages: nav_row.append(InlineKeyboardButton("နောက်စာမျက်နှာ ➡️", callback_data=f"page_{page+1}"))
+    is_search_flag = 1 if is_search else 0
+    if page > 1: nav_row.append(InlineKeyboardButton("⬅️ ယခင်", callback_data=f"page|{page-1}|{is_search_flag}"))
+    if page < total_pages: nav_row.append(InlineKeyboardButton("နောက်သို့ ➡️", callback_data=f"page|{page+1}|{is_search_flag}"))
     if nav_row: keyboard.append(nav_row)
 
     action_row = []
@@ -309,7 +336,7 @@ async def process_checkout(context, chat_id, user_id, msg_id=None, player_id_inp
     conn.commit()
     conn.close()
     
-    user_carts[user_id] = {}
+    user_carts[user_id] = {} # Checkout သွားလျှင် Cart အလွတ်လုပ်မည်
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည် (Cancel)", callback_data="cancel_cart")]])
     
     if msg_id:
@@ -334,23 +361,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_user_dashboard(update, context)
         return
 
-    if "ဝယ်ယူမည်" in text and "မှတ်တမ်း" not in text:
+    elif text == "🛍️ ဝယ်ယူမည် (Products)":
         if await check_ban_and_shop(update, context): return
         if user_id in admin_states: del admin_states[user_id]
-        if user_id in user_carts: del user_carts[user_id]
         if user_id in user_states: del user_states[user_id]
-        await show_cart_selector(context, chat_id, user_id, page=1)
+        # ဒီနေရာမှာ Cart ကိုဖျက်မည်မဟုတ်ပါ (အခြားရှာထားသည်များနှင့် တွဲဝယ်နိုင်ရန်)
+        await show_cart_selector(context, chat_id, user_id, page=1, is_search=False)
         return
+
     elif "မှတ်တမ်း" in text:
         if user_id in admin_states: del admin_states[user_id]
         await show_orders(context, chat_id, user_id)
         return
+
     elif "Admin Panel" in text and user_id == ADMIN_USER_ID:
         if user_id in admin_states: del admin_states[user_id]
         await show_admin_panel(context, chat_id)
         return
 
-    if user_id in admin_states and user_id == ADMIN_USER_ID:
+    elif user_id in admin_states and user_id == ADMIN_USER_ID:
         state = admin_states[user_id]
         action = state["action"]
         conn = get_db()
@@ -433,6 +462,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
 
+    # --- Search Engine Handling ---
+    else:
+        if await check_ban_and_shop(update, context): return
+        user_last_search[user_id] = text.strip()
+        await show_cart_selector(context, chat_id, user_id, page=1, is_search=True)
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not update.effective_user:
@@ -458,15 +493,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 လုပ်ဆောင်ချက် ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID: await show_admin_panel(context, chat_id)
 
-    elif data.startswith("page_"):
-        target_page = int(data.split("_")[1])
-        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=target_page)
+    # --- Updated Pagination & Modifier Callbacks ---
+    elif data.startswith("page|"):
+        parts = data.split("|")
+        target_page = int(parts[1])
+        is_search = bool(int(parts[2]))
+        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=target_page, is_search=is_search)
 
-    elif data.startswith("mod|"):
+    elif data.startswith("m|"):
         parts = data.split("|")
         prod_id = parts[1]
         delta = int(parts[2])
         page = int(parts[3])
+        is_search = bool(int(parts[4]))
          
         is_g2bulk = str(prod_id).startswith("g2_")
         if is_g2bulk: stock_count = 99999
@@ -481,7 +520,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer(f"⚠️ Stock မလောက်တော့ပါ။", show_alert=True)
             new_qty = stock_count
         user_carts[user_id][prod_id] = new_qty
-        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=page)
+        await show_cart_selector(context, chat_id, user_id, message_id=msg_id, page=page, is_search=is_search)
 
     elif data == "sync_g2bulk" and user_id == ADMIN_USER_ID:
         await query.edit_message_text("🔄 API မှ Product များကို ဆွဲယူနေပါသည်... ခေတ္တစောင့်ပါ။")
@@ -824,7 +863,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     conn.commit()
                     
                     codes_text = "\n".join(codes_to_send) if codes_to_send else "Top-up တင်နေဆဲဖြစ်ပါသည်။ (Admin မှ ဆက်လက်စစ်ဆေးပေးပါမည်)"
-                    # Buyer ကိုပြမည့်စာတွင် G2Bulk ဟူသော စကားလုံး လုံးဝမပါဝင်စေရန် ပြင်ဆင်ထားပါသည်
                     try: await context.bot.send_message(chat_id=buyer_id, text=f"✅ <b>သင့်ရဲ့ Order #{display_order_id} ကို လက်ခံရရှိပါသည်။</b>\n\n🎁 <b>Status:</b>\n{codes_text}\n*(Server ကြန့်ကြာမှုကြောင့် အနည်းငယ် စောင့်ဆိုင်းရနိုင်ပါသည်။)*", parse_mode="HTML")
                     except: pass
                     
