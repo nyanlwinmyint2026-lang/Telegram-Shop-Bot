@@ -44,7 +44,6 @@ SMILE_RATES = {
 }
 
 def round_to_50(amount):
-    """ငွေပမာဏကို အနီးစပ်ဆုံး ၅၀ အပြည့် (Nearest 50) သို့ ညှိပေးသည့် Function"""
     return int(round(amount / 50.0)) * 50
 
 def get_db():
@@ -58,6 +57,11 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock (id SERIAL PRIMARY KEY, product_id TEXT, code TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, user_id BIGINT, username TEXT, details TEXT, total_price INTEGER, status TEXT, date TEXT, monthly_id INTEGER, file_unique_ids TEXT)''')
+    
+    # Database Speed & Scalability Optimization (Indexes)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_date ON orders(user_id, date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_product_id ON stock(product_id)")
     
     try: cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE"); conn.commit()
     except: conn.rollback()
@@ -107,7 +111,7 @@ def is_shop_open():
 
 def get_main_keyboard(user_id):
     keyboard = [
-        [KeyboardButton("🛍️ ဝယ်ယူမည် (Products)"), KeyboardButton("🧾 ဝယ်ယူမှုမှတ်တမ်း")],
+        [KeyboardButton("🛍️ ဝယ်ယူမည် (Products)"), KeyboardButton("🔍 ML Acc Region စစ်မယ်")],
         [KeyboardButton("🧮 Smile Coin ဈေးတွက်မယ်"), KeyboardButton("👤 ကျွန်ုပ်၏ အကောင့်")]
     ]
     if user_id == ADMIN_USER_ID:
@@ -128,6 +132,39 @@ async def check_ban_and_shop(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return True
     return False
 
+# --- Hybrid MLBB Checker ---
+def verify_mlbb_account(uid, server):
+    # Primary: Third-party API with Region
+    try:
+        url = f"https://yanjiestore.com/submitt.php?ID={uid}&server={server}"
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        if res.status_code == 200:
+            try:
+                data = res.json()
+                name = data.get("name") or data.get("username") or data.get("nickname") or data.get("result", {}).get("username")
+                region = data.get("region") or data.get("country") or data.get("result", {}).get("region")
+                if name:
+                    return True, name, region or "Global"
+            except:
+                pass
+    except:
+        pass
+
+    # Fallback: G2Bulk Validation API
+    try:
+        headers = {"X-API-Key": G2BULK_API_KEY, "Content-Type": "application/json"}
+        g2_url = "https://api.g2bulk.com/v1/games/checkPlayerId"
+        payload = {"game": "mlbb", "user_id": str(uid), "server_id": str(server)}
+        res = requests.post(g2_url, headers=headers, json=payload, timeout=6)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("valid") == "valid" and data.get("name"):
+                return True, data.get("name"), "Global / Server Verified"
+    except:
+        pass
+
+    return False, None, None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_ban_and_shop(update, context): return
     user_id = update.effective_user.id
@@ -140,10 +177,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     
     welcome_text = (
-        "🌟 <b>Digital Product Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\n"
+        "🌟 <b>MST Game Shop မှ လှိုက်လှဲစွာ ကြိုဆိုပါတယ်။</b> 🌟\n\n"
         "💳 သင့်အတွက် အကောင်းဆုံး ဝန်ဆောင်မှုပေးရန် အဆင်သင့်ရှိနေပါသည်။\n"
         "👇 အောက်ပါ Menu ခလုတ်များကို အသုံးပြု၍ အလွယ်တကူ ဝယ်ယူနိုင်ပါသည်။\n\n"
-        "💡 <i>အခြား Game Top-up များ ဝယ်ယူလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, Mobile Legends) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>"
+        "💡 <i>Game Top-up များ ရှာဖွေလိုပါက ဂိမ်းအမည် (ဥပမာ - PUBG, MLBB) ကို စာရိုက်ရှာဖွေနိုင်ပါသည်။</i>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
@@ -164,7 +201,7 @@ async def show_categories_menu(context, chat_id, message_id=None):
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# --- Cart Selector with Category Filters ---
+# --- Cart Selector ---
 async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1, cat_type="Manual"):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
@@ -288,24 +325,7 @@ async def start_calculator_flow(context, chat_id, message_id=None):
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-async def show_orders(context, chat_id, user_id, message_id=None):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, details, total_price, status, date, monthly_id FROM orders WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,))
-    orders = cursor.fetchall()
-    conn.close()
-    
-    if not orders: text = "⚠️ သင် ဝယ်ယူထားသော မှတ်တမ်း မရှိသေးပါ။"
-    else:
-        text = "🧾 <b>နောက်ဆုံး ဝယ်ယူထားသော ၅ ကြိမ်:</b>\n\n"
-        for o in orders:
-            status_emoji = "✅" if o[3] == "accepted" else ("❌" if o[3] == "rejected" else "⏳")
-            display_id = o[5] if o[5] else o[0]
-            text += f"🔖 Order #{display_id} | 💰 {o[2]:,} MMK\n{status_emoji} Status: {o[3].upper()} | 📅 {o[4]}\n\n"
-            
-    if message_id: await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML")
-    else: await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
-
+# --- USER DASHBOARD (12 Months Breakdown) ---
 async def show_user_dashboard(update, context):
     user_id = update.effective_user.id
     username = update.effective_user.username
@@ -314,14 +334,46 @@ async def show_user_dashboard(update, context):
     
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT details, date, total_price FROM orders WHERE user_id=%s AND status='accepted' AND date LIKE %s", (user_id, f"{current_year}%"))
+    cursor.execute("SELECT details, date FROM orders WHERE user_id=%s AND status='accepted' AND date LIKE %s", (user_id, f"{current_year}%"))
     orders = cursor.fetchall()
     conn.close()
 
     total_orders = len(orders)
-    text = f"👤 <b>ဝယ်ယူသူ:</b> {display_uname} (ID: <code>{user_id}</code>)\n🛍️ <b>စုစုပေါင်း အောင်မြင်ထားသော Order:</b> {total_orders} ကြိမ်\n\n"
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_stats = {m: {"300": 0, "1k": 0} for m in range(1, 13)}
+
+    for details_str, dt_str in orders:
+        try:
+            m = int(dt_str[5:7])
+        except:
+            continue
+        for item in details_str.split(", "):
+            if ":" in item:
+                parts = item.split(":")
+                pid = parts[0]
+                try: qty = int(parts[1])
+                except: qty = 0
+                if pid in ("300_code", "smile_300"):
+                    month_stats[m]["300"] += qty
+                elif pid in ("1k_code", "smile_1k"):
+                    month_stats[m]["1k"] += qty
+
+    text = (
+        f"👤 <b>ဝယ်ယူသူ:</b> {display_uname} (ID: <code>{user_id}</code>)\n"
+        f"🛍️ <b>စုစုပေါင်း အောင်မြင်ထားသော Order:</b> {total_orders} ကြိမ်\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 <b>{current_year} ခုနှစ် လအလိုက် ဝယ်ယူခဲ့သော Code စာရင်း:</b>\n\n"
+    )
+
+    for m in range(1, 13):
+        m_name = month_names[m-1]
+        c300 = month_stats[m]["300"]
+        c1k = month_stats[m]["1k"]
+        text += f"• <b>{m_name} {current_year}</b> : 300(<b>{c300}</b>) Code | 1k(<b>{c1k}</b>) Code\n"
+
     await update.message.reply_text(text, parse_mode="HTML")
 
+# --- ADMIN PANEL ---
 async def show_admin_panel(context, chat_id, message_id=None):
     conn = get_db()
     cursor = conn.cursor()
@@ -338,7 +390,7 @@ async def show_admin_panel(context, chat_id, message_id=None):
         [InlineKeyboardButton("📦 Stock စာရင်းနှင့် Code စီမံရန်", callback_data="manage_stock_menu")],
         [InlineKeyboardButton("🟨 ဈေးပြင်ရန်", callback_data="manage_price"), InlineKeyboardButton("🏦 Payment Info", callback_data="manage_payment")],
         [InlineKeyboardButton("📈 အမြတ်ငွေစာရင်း", callback_data="profit_report"), InlineKeyboardButton("📊 ယနေ့ အရောင်း", callback_data="admin_sales")],
-        [InlineKeyboardButton("🏆 Top Buyers", callback_data="top_buyers"), InlineKeyboardButton("📝 Channel သို့ Post", callback_data="admin_post_channel")],
+        [InlineKeyboardButton("🏆 Top Buyers (10 ဦး)", callback_data="top_buyers"), InlineKeyboardButton("📝 Channel သို့ Post", callback_data="admin_post_channel")],
         [InlineKeyboardButton("📢 Broadcast ပို့ရန်", callback_data="admin_broadcast"), InlineKeyboardButton(shop_status, callback_data="toggle_shop_status")],
         [InlineKeyboardButton("🚫 Banned Users", callback_data="view_banned")]
     ]
@@ -425,6 +477,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data["username"] = update.effective_user.username
 
+    # Handle ML Account Region Checker Input
+    if user_id in user_states and user_states[user_id] == "waiting_ml_check":
+        del user_states[user_id]
+        parts = text.replace("(", " ").replace(")", " ").split()
+        if len(parts) < 2:
+            await update.message.reply_text("⚠️ <b>User ID နှင့် Zone ID ကို ခြားပြီး ရိုက်ထည့်ပေးပါ။</b>\nဥပမာ - <code>12345678 1234</code>", parse_mode="HTML")
+            return
+
+        uid, server = parts[0], parts[1]
+        wait_msg = await update.message.reply_text("🔍 MLBB Account အား စစ်ဆေးနေပါသည်... ခေတ္တစောင့်ပါ။")
+        
+        is_valid, name, region = verify_mlbb_account(uid, server)
+        if is_valid:
+            res_text = (
+                f"✅ <b>MLBB Account အချက်အလက်</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>In-game Name:</b> <code>{name}</code>\n"
+                f"🌍 <b>Account Region:</b> <b>{region}</b>\n"
+                f"🆔 <b>Account ID:</b> <code>{uid}</code>\n"
+                f"🌐 <b>Zone/Server:</b> <code>{server}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━"
+            )
+            keyboard = [[InlineKeyboardButton("🔍 နောက်တစ်ခု ထပ်စစ်မည်", callback_data="check_ml_acc_btn")]]
+            await wait_msg.edit_text(res_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            fail_text = "❌ <b>Account ရှာမတွေ့ပါ!</b>\nUser ID သို့မဟုတ် Zone ID မှားယွင်းနေပါသည်။ စာလုံးပေါင်း သေချာစစ်ဆေးပြီး ပြန်လည်စမ်းသပ်ပါ။"
+            keyboard = [[InlineKeyboardButton("🔄 ပြန်လည်စစ်ဆေးမည်", callback_data="check_ml_acc_btn")]]
+            await wait_msg.edit_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
     # Handle Calculator Price Input
     if user_id in user_states and user_states[user_id].get("action") == "waiting_calc_price":
         try:
@@ -464,22 +546,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_user_dashboard(update, context)
         return
 
+    elif text == "🔍 ML Acc Region စစ်မယ်":
+        if await check_ban_and_shop(update, context): return
+        user_states[user_id] = "waiting_ml_check"
+        await update.message.reply_text(
+            "🔍 <b>Mobile Legends Account & Region စစ်ဆေးရန်</b>\n\n"
+            "ကျေးဇူးပြု၍ သင့်ရဲ့ <b>User ID</b> နှင့် <b>Zone/Server ID</b> ကို ခြားပြီး ရိုက်ထည့်ပေးပါ။\n\n"
+            "(ဥပမာ - <code>12345678 1234</code>)",
+            parse_mode="HTML"
+        )
+        return
+
     elif text == "🧮 Smile Coin ဈေးတွက်မယ်":
         if await check_ban_and_shop(update, context): return
         if user_id in user_states: del user_states[user_id]
         await start_calculator_flow(context, chat_id)
         return
 
-    elif "ဝယ်ယူမည်" in text and "မှတ်တမ်း" not in text:
+    elif text == "🛍️ ဝယ်ယူမည် (Products)":
         if await check_ban_and_shop(update, context): return
         if user_id in admin_states: del admin_states[user_id]
         if user_id in user_states: del user_states[user_id]
         await show_cart_selector(context, chat_id, user_id, page=1, cat_type="Manual")
-        return
-
-    elif "မှတ်တမ်း" in text:
-        if user_id in admin_states: del admin_states[user_id]
-        await show_orders(context, chat_id, user_id)
         return
 
     elif "Admin Panel" in text and user_id == ADMIN_USER_ID:
@@ -493,12 +581,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_db()
         cursor = conn.cursor()
         
-        if action == "set_exchange":
+        if action == "manual_ban":
+            try:
+                target_id = int(text)
+                cursor.execute("INSERT INTO users (user_id, is_banned) VALUES (%s, TRUE) ON CONFLICT (user_id) DO UPDATE SET is_banned=TRUE", (target_id,))
+                conn.commit()
+                await update.message.reply_text(f"✅ User ID <code>{target_id}</code> အား အောင်မြင်စွာ Ban လိုက်ပါပြီ။", parse_mode="HTML")
+                del admin_states[user_id]
+                await show_admin_panel(context, chat_id)
+            except:
+                await update.message.reply_text("⚠️ User ID ကို ဂဏန်းသီးသန့်ဖြင့်သာ ရိုက်ထည့်ပါ။")
+
+        elif action == "set_exchange":
             try:
                 rate = float(text)
                 cursor.execute("UPDATE settings SET value=%s WHERE key='exchange_rate'", (str(rate),))
                 conn.commit()
-                await update.message.reply_text(f"✅ USD ငွေလဲနှုန်းကို 1$ = {rate} Ks သို့ ပြောင်းလဲလိုက်ပါပြီ။\n(ဈေးနှုန်းအသစ်များ အသက်ဝင်ရန် Admin Panel မှ 'Sync API' ကို ပြန်နှိပ်ပေးပါ။)")
+                await update.message.reply_text(f"✅ USD ငွေလဲနှုန်းကို 1$ = {rate} Ks သို့ ပြောင်းလဲလိုက်ပါပြီ。\n(ဈေးနှုန်းအသစ်များ အသက်ဝင်ရန် Admin Panel မှ 'Sync API' ကို ပြန်နှိပ်ပေးပါ။)")
                 del admin_states[user_id]
                 await show_admin_panel(context, chat_id)
             except: await update.message.reply_text("⚠️ ဂဏန်းဖြင့်သာ ရိုက်ထည့်ပါ။ (ဥပမာ - 4670)")
@@ -508,7 +607,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 profit_pct = float(text)
                 cursor.execute("UPDATE settings SET value=%s WHERE key='profit_percentage'", (str(profit_pct),))
                 conn.commit()
-                await update.message.reply_text(f"✅ အမြတ်ငွေရာခိုင်နှုန်းကို {profit_pct}% သို့ ပြောင်းလဲလိုက်ပါပြီ။\n(ဈေးနှုန်းအသစ်များ အသက်ဝင်ရန် Admin Panel မှ 'Sync API' ကို ပြန်နှိပ်ပေးပါ။)")
+                await update.message.reply_text(f"✅ အမြတ်ငွေရာခိုင်နှုန်းကို {profit_pct}% သို့ ပြောင်းလဲလိုက်ပါပြီ。\n(ဈေးနှုန်းအသစ်များ အသက်ဝင်ရန် Admin Panel မှ 'Sync API' ကို ပြန်နှိပ်ပေးပါ။)")
                 del admin_states[user_id]
                 await show_admin_panel(context, chat_id)
             except: await update.message.reply_text("⚠️ ဂဏန်းဖြင့်သာ ရိုက်ထည့်ပါ။ (ဥပမာ - 5)")
@@ -601,6 +700,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 လုပ်ဆောင်ချက် ဖျက်သိမ်းလိုက်ပါပြီ။")
         if user_id == ADMIN_USER_ID: await show_admin_panel(context, chat_id)
 
+    elif data == "check_ml_acc_btn":
+        user_states[user_id] = "waiting_ml_check"
+        await query.edit_message_text("🔍 <b>User ID နှင့် Zone ID ကို ခြားပြီး ရိုက်ထည့်ပေးပါ:</b>\n(ဥပမာ - <code>12345678 1234</code>)", parse_mode="HTML")
+
     # --- Calculator Callbacks ---
     elif data == "cancel_calc":
         if user_id in user_states: del user_states[user_id]
@@ -628,14 +731,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ အချိန်လွန်သွားပါသဖြင့် ပြန်လည်စတင်ပေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]))
             return
 
-        # Store pct for Price List Generation
         user_states[user_id]["pct"] = pct
         coin_cost = cost / coins
         profit_multiplier = 1 + (pct / 100)
 
         def fmt_row(name, item_coins, is_dia=False):
             item_cost = round(item_coins * coin_cost)
-            # အနီးစပ်ဆုံး ၅၀ သို့ ညှိယူခြင်း
             item_sell = round_to_50(item_cost * profit_multiplier)
             prefix = "💎 " if is_dia else "• "
             return f"{prefix}<b>{name}</b> ({item_coins} Coins)\n  အရင်း: {item_cost:,} Ks | ရောင်း: <b>{item_sell:,} Ks</b>\n"
@@ -681,7 +782,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         coin_cost = cost / coins
         profit_multiplier = 1 + (pct / 100)
 
-        # Ready-to-copy Price List Template
         plist_text = (
             f"✨ <b>MLBB DIAMOND PRICE LIST</b> ✨\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
@@ -891,19 +991,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="manage_stock_menu")])
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
 
+    # --- BANNED USERS SYSTEM ---
     elif data == "view_banned" and user_id == ADMIN_USER_ID:
         cursor.execute("SELECT user_id FROM users WHERE is_banned=TRUE")
         banned_users = cursor.fetchall()
-        if not banned_users:
-            await query.edit_message_text("🚫 Banned User မရှိသေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
-            return
         text = "🚫 <b>Banned Users စာရင်း:</b>\n\n"
-        keyboard = []
-        for b in banned_users:
-            text += f"ID: <code>{b[0]}</code>\n"
-            keyboard.append([InlineKeyboardButton(f"🔓 Unban {b[0]}", callback_data=f"unban_{b[0]}")])
+        keyboard = [
+            [InlineKeyboardButton("➕ ID ဖြင့် Ban မည်", callback_data="admin_manual_ban")]
+        ]
+        if not banned_users:
+            text += "Banned User မရှိသေးပါ။"
+        else:
+            for b in banned_users:
+                text += f"ID: <code>{b[0]}</code>\n"
+                keyboard.append([InlineKeyboardButton(f"🔓 Unban {b[0]}", callback_data=f"unban_{b[0]}")])
         keyboard.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "admin_manual_ban" and user_id == ADMIN_USER_ID:
+        admin_states[user_id] = {"action": "manual_ban"}
+        await query.edit_message_text("🚫 <b>Ban လိုသော User ID (Telegram ID) ကို ဂဏန်းဖြင့် ရိုက်ထည့်ပါ:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည်", callback_data="cancel_action")]]))
 
     elif data.startswith("unban_") and user_id == ADMIN_USER_ID:
         target_id = int(data.split("_")[1])
@@ -968,6 +1075,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_states[user_id] = {"action": "broadcast"}
         await query.edit_message_text("📢 ပို့လိုသော ကြေညာချက်ကို ရိုက်ထည့်ပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🟥 ပယ်ဖျက်မည်", callback_data="cancel_action")]]))
 
+    # --- TOP 10 BUYERS (Ranked by Total Spent with Detailed Breakdown) ---
     elif data == "top_buyers" and user_id == ADMIN_USER_ID:
         current_month = datetime.now().strftime("%Y-%m")
         cursor.execute("SELECT user_id, username, details, total_price FROM orders WHERE status='accepted' AND date LIKE %s", (f"{current_month}%",))
@@ -975,20 +1083,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buyer_stats = {}
         for o in orders:
             uid, uname, details_str, price = o
-            if uid not in buyer_stats: buyer_stats[uid] = {"username": uname, "spent": 0, "qty": 0}
+            if uid not in buyer_stats:
+                buyer_stats[uid] = {"username": uname, "spent": 0, "code_300": 0, "code_1k": 0}
             buyer_stats[uid]["spent"] += price
             for item in details_str.split(", "):
                 if ":" in item:
-                    buyer_stats[uid]["qty"] += int(item.split(":")[1])
+                    p_parts = item.split(":")
+                    pid = p_parts[0]
+                    try: qty = int(p_parts[1])
+                    except: qty = 0
+                    if pid in ("300_code", "smile_300"):
+                        buyer_stats[uid]["code_300"] += qty
+                    elif pid in ("1k_code", "smile_1k"):
+                        buyer_stats[uid]["code_1k"] += qty
 
-        sorted_buyers = sorted(buyer_stats.items(), key=lambda x: x[1]["spent"], reverse=True)[:5]
-        text = f"🏆 <b>Top 5 Buyers ({current_month}):</b>\n\n"
-        if not sorted_buyers: text += "ဝယ်ယူသူ မရှိသေးပါ။"
+        # Sort strictly by total spent descending, top 10
+        sorted_buyers = sorted(buyer_stats.items(), key=lambda x: x[1]["spent"], reverse=True)[:10]
+        text = f"🏆 <b>Top 10 Buyers ({current_month}):</b>\n\n"
+        if not sorted_buyers:
+            text += "ဝယ်ယူသူ မရှိသေးပါ။"
         else:
             for i, (uid, stats) in enumerate(sorted_buyers):
                 raw_u = stats.get('username')
                 uname = f"@{raw_u}" if raw_u and raw_u != "No_Username" else f"ID: <code>{uid}</code>"
-                text += f"<b>{i+1}. {uname}</b>\n   🔹 ဝယ်ယူမှု: {stats['qty']} ကြိမ်\n   💰 စုစုပေါင်း: <b>{stats['spent']:,}</b> MMK\n\n"
+                text += (
+                    f"<b>{i+1}. {uname}</b>\n"
+                    f"   📦 300 Code: <b>{stats['code_300']}</b> ခု | 1k Code: <b>{stats['code_1k']}</b> ခု\n"
+                    f"   💰 စုစုပေါင်းတန်ဖိုး: <b>{stats['spent']:,}</b> MMK\n\n"
+                )
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
 
     elif data.startswith("editprice_") and user_id == ADMIN_USER_ID:
@@ -1115,7 +1237,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- Async Buffer Processor for Multiple Photos (Album/Single) ---
+# --- Media Group Safe Receiver & Album Delivery ---
 async def process_photos_group(context, user_id, chat_id, order, photos_list):
     order_id, details, total, monthly_id = order
     display_order_id = monthly_id if monthly_id else order_id
