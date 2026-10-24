@@ -507,7 +507,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wait_msg.edit_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Handle Calculator Price Input
+    # Handle Calculator Price Input (Includes 3%, 4%, 5%, 6%, 7% Buttons)
     if user_id in user_states and user_states[user_id].get("action") == "waiting_calc_price":
         try:
             cost = float(text.replace(",", ""))
@@ -523,7 +523,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             keyboard = [
                 [
-                    InlineKeyboardButton("5% အမြတ်", callback_data="calc_pct_5"),
+                    InlineKeyboardButton("3% အမြတ်", callback_data="calc_pct_3"),
+                    InlineKeyboardButton("4% အမြတ်", callback_data="calc_pct_4"),
+                    InlineKeyboardButton("5% အမြတ်", callback_data="calc_pct_5")
+                ],
+                [
                     InlineKeyboardButton("6% အမြတ်", callback_data="calc_pct_6"),
                     InlineKeyboardButton("7% အမြတ်", callback_data="calc_pct_7")
                 ],
@@ -1097,7 +1101,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     elif pid in ("1k_code", "smile_1k"):
                         buyer_stats[uid]["code_1k"] += qty
 
-        # Sort strictly by total spent descending, top 10
         sorted_buyers = sorted(buyer_stats.items(), key=lambda x: x[1]["spent"], reverse=True)[:10]
         text = f"🏆 <b>Top 10 Buyers ({current_month}):</b>\n\n"
         if not sorted_buyers:
