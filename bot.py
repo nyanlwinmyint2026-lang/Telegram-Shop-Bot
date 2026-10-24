@@ -17,13 +17,13 @@ BOT_LINK = "https://t.me/MSTCODESHOPBOT"
 # G2Bulk API Key
 G2BULK_API_KEY = "g2b_2de2af3455055d7a975ffd6fceadce2b42b0c4458a369ff7e69fb02bee134fa3"
 
-# Smile One Coin Data from User Reference
+# Smile One Coin Rates in Exact Order
 SMILE_RATES = {
     "passes": [
         ("Weekly Pass", 76),
         ("Twilight Pass", 402.5),
         ("Weekly Elite Package", 39),
-        ("Monthly Epic", 196.5)
+        ("Monthly Epic Package", 196.5)
     ],
     "bonus_dia": [
         ("50+50 Dia", 39),
@@ -42,6 +42,10 @@ SMILE_RATES = {
         ("7740+1548 Dia", 6079)
     ]
 }
+
+def round_to_50(amount):
+    """ငွေပမာဏကို အနီးစပ်ဆုံး ၅၀ အပြည့် (Nearest 50) သို့ ညှိပေးသည့် Function"""
+    return int(round(amount / 50.0)) * 50
 
 def get_db():
     return psycopg2.connect(DATABASE_URL)
@@ -82,7 +86,6 @@ user_carts = {}
 admin_states = {}
 user_states = {}
 user_last_search = {}
-# Album Photos Buffer Tracking
 media_groups = defaultdict(list)
 media_group_tasks = {}
 
@@ -625,39 +628,89 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ အချိန်လွန်သွားပါသဖြင့် ပြန်လည်စတင်ပေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]))
             return
 
+        # Store pct for Price List Generation
+        user_states[user_id]["pct"] = pct
         coin_cost = cost / coins
         profit_multiplier = 1 + (pct / 100)
 
-        def fmt_row(name, item_coins):
+        def fmt_row(name, item_coins, is_dia=False):
             item_cost = round(item_coins * coin_cost)
-            item_sell = round(item_cost * profit_multiplier)
-            return f"• <b>{name}</b> ({item_coins} Coins)\n  အရင်း: {item_cost:,} Ks | ရောင်း: <b>{item_sell:,} Ks</b>\n"
+            # အနီးစပ်ဆုံး ၅၀ သို့ ညှိယူခြင်း
+            item_sell = round_to_50(item_cost * profit_multiplier)
+            prefix = "💎 " if is_dia else "• "
+            return f"{prefix}<b>{name}</b> ({item_coins} Coins)\n  အရင်း: {item_cost:,} Ks | ရောင်း: <b>{item_sell:,} Ks</b>\n"
 
         calc_text = (
             f"🧮 <b>Smile Coin Reseller ဈေးနှုန်းတွက်ချက်မှု</b>\n\n"
             f"🎟️ Code: <b>{coins} Coins</b>\n"
             f"💵 ဝယ်ရင်းဈေး: <b>{int(cost):,} MMK</b>\n"
             f"🪙 1 Coin တန်ဖိုး: <b>{coin_cost:.2f} MMK</b>\n"
-            f"📈 အမြတ်တင်နှုန်း: <b>{pct}%</b>\n"
+            f"📈 အမြတ်တင်နှုန်း: <b>{pct}%</b> (အနီးစပ်ဆုံး ၅၀ ကျပ်ညှိထားသည်)\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🎟️ <b>Passes & Packages</b>\n"
         )
         for name, c in SMILE_RATES["passes"]:
-            calc_text += fmt_row(name, c)
+            calc_text += fmt_row(name, c, is_dia=False)
 
         calc_text += f"\n💎 <b>Double Diamonds (1+1)</b>\n"
         for name, c in SMILE_RATES["bonus_dia"]:
-            calc_text += fmt_row(name, c)
+            calc_text += fmt_row(name, c, is_dia=True)
 
         calc_text += f"\n💎 <b>Normal Diamonds</b>\n"
         for name, c in SMILE_RATES["normal_dia"]:
-            calc_text += fmt_row(name, c)
+            calc_text += fmt_row(name, c, is_dia=True)
 
         calc_text += "━━━━━━━━━━━━━━━━━━"
 
-        keyboard = [[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]
+        keyboard = [
+            [InlineKeyboardButton("📋 Price List ထုတ်မည်", callback_data="gen_pricelist")],
+            [InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]
+        ]
         await query.edit_message_text(calc_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-        if user_id in user_states: del user_states[user_id]
+
+    elif data == "gen_pricelist":
+        state = user_states.get(user_id, {})
+        coins = state.get("coins", 300)
+        cost = state.get("cost", 0)
+        pct = state.get("pct", 5)
+
+        if cost <= 0:
+            await query.edit_message_text("⚠️ အချက်အလက် မရှိတော့ပါ။ ပြန်လည်စတင်ပေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]]))
+            return
+
+        coin_cost = cost / coins
+        profit_multiplier = 1 + (pct / 100)
+
+        # Ready-to-copy Price List Template
+        plist_text = (
+            f"✨ <b>MLBB DIAMOND PRICE LIST</b> ✨\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎟️ <b>Passes & Packages</b>\n"
+        )
+        for name, c in SMILE_RATES["passes"]:
+            sell_price = round_to_50(round(c * coin_cost) * profit_multiplier)
+            plist_text += f"• {name} — <b>{sell_price:,} MMK</b>\n"
+
+        plist_text += f"\n💎 <b>Double Diamonds (1+1)</b>\n"
+        for name, c in SMILE_RATES["bonus_dia"]:
+            sell_price = round_to_50(round(c * coin_cost) * profit_multiplier)
+            plist_text += f"• 💎 {name} — <b>{sell_price:,} MMK</b>\n"
+
+        plist_text += f"\n💎 <b>Normal Diamonds</b>\n"
+        for name, c in SMILE_RATES["normal_dia"]:
+            sell_price = round_to_50(round(c * coin_cost) * profit_multiplier)
+            plist_text += f"• 💎 {name} — <b>{sell_price:,} MMK</b>\n"
+
+        plist_text += (
+            f"\n━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ <i>အမြန်ဆုံး ဝန်ဆောင်မှုဖြင့် ယုံကြည်စိတ်ချစွာ ဝယ်ယူနိုင်ပါသည်။</i>"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("🔙 တွက်ချက်မှုသို့ ပြန်သွားရန်", callback_data=f"calc_pct_{pct}")],
+            [InlineKeyboardButton("🔄 အသစ်ပြန်တွက်မည်", callback_data="start_calc")]
+        ]
+        await query.edit_message_text(plist_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
     # --- Category & Cart Navigation ---
     elif data == "open_categories":
@@ -1117,7 +1170,6 @@ async def process_photos_group(context, user_id, chat_id, order, photos_list):
     
     try:
         if len(photos_list) > 1:
-            # ဓာတ်ပုံအားလုံးကို Album ပြုလုပ်၍ Admin ထံ ပေးပို့မည်
             media = [InputMediaPhoto(photos_list[0]["id"], caption=caption, parse_mode="HTML")] + [InputMediaPhoto(p["id"]) for p in photos_list[1:]]
             await context.bot.send_media_group(chat_id=ADMIN_USER_ID, media=media)
             await context.bot.send_message(chat_id=ADMIN_USER_ID, text=f"👆 အထက်ပါ Order #{display_order_id} အတွက် ဆုံးဖြတ်ချက်ချပါ:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1128,9 +1180,8 @@ async def process_photos_group(context, user_id, chat_id, order, photos_list):
     except Exception as e:
         await context.bot.send_message(chat_id=chat_id, text="⚠️ စနစ် ချို့ယွင်းနေပါသည်။", reply_markup=get_main_keyboard(user_id))
 
-# Delayed worker for media group debouncing
 async def delayed_media_group_worker(context, user_id, chat_id, order, media_group_id):
-    await asyncio.sleep(2.0) # ဓာတ်ပုံများ အကုန်ရောက်သည်အထိ ၂ စက္ကန့် စောင့်ဆိုင်းမည်
+    await asyncio.sleep(2.0)
     photos = media_groups.pop(media_group_id, [])
     media_group_tasks.pop(media_group_id, None)
     if photos:
@@ -1161,7 +1212,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if media_group_id:
         media_groups[media_group_id].append(photo_data)
         if media_group_id not in media_group_tasks:
-            # Task အသစ်ဖွင့်၍ အုပ်စုဖွဲ့ ပို့ဆောင်စေမည်
             media_group_tasks[media_group_id] = asyncio.create_task(
                 delayed_media_group_worker(context, user_id, chat_id, order, media_group_id)
             )
