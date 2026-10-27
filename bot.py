@@ -14,7 +14,7 @@ DATABASE_URL = "postgresql://neondb_owner:npg_Xv5HWOA4hxPV@ep-long-dew-b4z0dkg4-
 CHANNEL_USERNAME = "@MSTGAMESHOP"
 BOT_LINK = "https://t.me/MSTCODESHOPBOT"
 
-# G2Bulk API Key (MLBB Nickname စစ်ဆေးရန် အရန်အဖြစ် သုံးသည်)
+# G2Bulk API Key
 G2BULK_API_KEY = "g2b_2de2af3455055d7a975ffd6fceadce2b42b0c4458a369ff7e69fb02bee134fa3"
 
 # Smile One Coin Rates (Name, Coins, Product_ID)
@@ -71,11 +71,9 @@ def init_db():
         
     cursor.execute("UPDATE orders SET monthly_id = id WHERE monthly_id IS NULL")
     
-    # Insert Core Codes
     cursor.execute("INSERT INTO products (id, name, price) VALUES ('300_code', '300 Code (300 Coins)', 27400) ON CONFLICT (id) DO NOTHING")
     cursor.execute("INSERT INTO products (id, name, price) VALUES ('1k_code', '1k Code (1000 Coins)', 91500) ON CONFLICT (id) DO NOTHING")
     
-    # Initialize MLBB Products in DB
     for category in SMILE_RATES.values():
         for name, coins, pid in category:
             is_dia = "Dia" in name
@@ -176,7 +174,7 @@ async def show_buy_categories_menu(context, chat_id, message_id=None):
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# --- Cart Selector ---
+# --- Cart Selector (Bug Fixed) ---
 async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1, cat_type="Codes"):
     if user_id not in user_carts: user_carts[user_id] = {}
     conn = get_db()
@@ -186,14 +184,14 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     offset = (page - 1) * ITEMS_PER_PAGE
     
     if cat_type == "Codes":
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE 'mlbb_%'")
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id NOT LIKE %s", ('mlbb_%',))
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'mlbb_%' ORDER BY price ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE %s ORDER BY price ASC LIMIT %s OFFSET %s", ('mlbb_%', ITEMS_PER_PAGE, offset))
         header_text = f"🛒 <b>Smile One Codes (စာမျက်နှာ {page}):</b>\n\n"
     else:
-        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE 'mlbb_%'")
+        cursor.execute("SELECT COUNT(*) FROM products WHERE id LIKE %s", ('mlbb_%',))
         total_products = cursor.fetchone()[0]
-        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE 'mlbb_%' ORDER BY id ASC LIMIT %s OFFSET %s", (ITEMS_PER_PAGE, offset))
+        cursor.execute("SELECT id, name, price FROM products WHERE id LIKE %s ORDER BY id ASC LIMIT %s OFFSET %s", ('mlbb_%', ITEMS_PER_PAGE, offset))
         header_text = f"💎 <b>MLBB Diamonds & Passes (စာမျက်နှာ {page}):</b>\n\n"
 
     total_pages = (total_products + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
@@ -262,7 +260,6 @@ async def show_cart_selector(context, chat_id, user_id, message_id=None, page=1,
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# --- START COMMAND (Deep Link Support) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_ban_and_shop(update, context): return
     user_id = update.effective_user.id
@@ -287,7 +284,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=get_main_keyboard(user_id))
 
-# --- Reseller Calculator Flow ---
 async def start_calculator_flow(context, chat_id, message_id=None):
     text = "🧮 <b>Smile Coin Reseller ဈေးနှုန်းတွက်ရန်</b>\n\nသင်ဝယ်ယူထားသော Code အမျိုးအစားကို ရွေးချယ်ပါ:"
     keyboard = [
@@ -301,7 +297,6 @@ async def start_calculator_flow(context, chat_id, message_id=None):
     else:
         await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# --- USER DASHBOARD ---
 async def show_user_dashboard(update, context):
     user_id = update.effective_user.id
     username = update.effective_user.username
@@ -345,7 +340,6 @@ async def show_user_dashboard(update, context):
 
     await update.message.reply_text(text, parse_mode="HTML")
 
-# --- ADMIN PANEL ---
 async def show_admin_panel(context, chat_id, message_id=None):
     shop_status = "🔴 ဆိုင်ပိတ်မည် (Close)" if is_shop_open() else "🟢 ဆိုင်ဖွင့်မည် (Open)"
     keyboard = [
@@ -440,7 +434,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data["username"] = update.effective_user.username
 
-    # Handle ML Account Region Checker (Standalone)
     if user_id in user_states and user_states[user_id] == "waiting_ml_check":
         del user_states[user_id]
         parts = text.replace("(", " ").replace(")", " ").split()
@@ -465,7 +458,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wait_msg.edit_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Handle Player ID input during checkout
     if user_id in user_states and user_states[user_id] == "waiting_checkout_player_id":
         parts = text.replace("(", " ").replace(")", " ").split()
         if len(parts) < 2:
@@ -491,7 +483,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await wait_msg.edit_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Handle User Calculator Price Input
     if user_id in user_states and user_states[user_id].get("action") == "waiting_calc_price":
         try:
             cost = float(text.replace(",", ""))
@@ -513,7 +504,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ ဈေးနှုန်းကို ဂဏန်းသီးသန့်ဖြင့် မှန်ကန်စွာ ရိုက်ထည့်ပေးပါ။")
             return
 
-    # Handle Admin Bulk Update Cost Input
     if user_id in user_states and user_states[user_id].get("action") == "waiting_admin_bulk_cost":
         try:
             cost = float(text.replace(",", ""))
@@ -678,7 +668,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("Error: အချိန်လွန်သွားပါပြီ။", show_alert=True)
 
-    # --- ADMIN Bulk Price Update Callbacks ---
     elif data == "admin_bulk_start" and user_id == ADMIN_USER_ID:
         text = "💎 <b>MLBB ဈေးနှုန်းများ အစုလိုက် ပြင်မည်</b>\n\nတွက်ချက်မည့် အခြေခံ Code ကို ရွေးပါ:"
         keyboard = [
@@ -745,7 +734,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("Error: အချိန်လွန်သွားပါပြီ။", show_alert=True)
 
-    # --- User Calculator Callbacks ---
     elif data == "cancel_calc":
         if user_id in user_states: del user_states[user_id]
         await query.edit_message_text("🚫 ဈေးနှုန်းတွက်ချက်မှုကို ပယ်ဖျက်လိုက်ပါပြီ။")
@@ -840,7 +828,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(plist_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # --- Category & Cart Navigation ---
     elif data == "open_categories":
         await show_buy_categories_menu(context, chat_id, message_id=msg_id)
 
@@ -905,7 +892,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin_panel(context, chat_id, msg_id)
 
     elif data == "manage_stock_menu" and user_id == ADMIN_USER_ID:
-        cursor.execute("SELECT id, name FROM products WHERE id NOT LIKE 'mlbb_%'")
+        cursor.execute("SELECT id, name FROM products WHERE id NOT LIKE %s", ('mlbb_%',))
         products = cursor.fetchall()
         text = "📦 <b>Stock စာရင်းနှင့် Code စီမံရန် (Manual Products)</b>\n\n"
         keyboard = []
@@ -943,7 +930,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="manage_stock_menu")])
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # --- BANNED USERS SYSTEM ---
     elif data == "view_banned" and user_id == ADMIN_USER_ID:
         cursor.execute("SELECT user_id FROM users WHERE is_banned=TRUE")
         banned_users = cursor.fetchall()
@@ -1009,7 +995,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
 
     elif data == "manage_price" and user_id == ADMIN_USER_ID:
-        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE 'mlbb_%'")
+        cursor.execute("SELECT id, name, price FROM products WHERE id NOT LIKE %s", ('mlbb_%',))
         products = cursor.fetchall()
         keyboard = []
         for p in products: keyboard.append([InlineKeyboardButton(f"🟨 Edit {p[1]} ({p[2]:,} MMK)", callback_data=f"editprice_{p[0]}")])
@@ -1071,7 +1057,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"📊 <b>ယနေ့ အရောင်းစာရင်း ({today}):</b>\n\n✅ အရေအတွက်: {count} ကြိမ်\n💰 ဝင်ငွေ: {total:,} MMK\n"
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="admin_panel")]]))
 
-    # --- ADMIN ACCEPT/REJECT/BAN (Hybrid Stock/Manual) ---
     elif data.startswith(("accept_", "reject_", "ban_")) and user_id == ADMIN_USER_ID:
         action_type, order_id_str = data.split("_")
         order_id = int(order_id_str)
@@ -1143,7 +1128,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- Media Group Safe Receiver & Album Delivery ---
 async def process_photos_group(context, user_id, chat_id, order, photos_list):
     order_id, details, total, monthly_id = order
     display_order_id = monthly_id if monthly_id else order_id
